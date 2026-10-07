@@ -307,7 +307,7 @@ sequenceDiagram
     participant CLI as Gatekeeper CLI
     participant Ext as PackageExtractor
     participant Ollama as Ollama Engine
-    participant Box as KernelSandbox
+    participant Sandbox as KernelSandbox
     participant Arb as DriftArbitrator
 
     User->>CLI: Run gatekeeper on package directory
@@ -321,9 +321,9 @@ sequenceDiagram
         Ollama-->>CLI: Return raw JSON response
         CLI->>CLI: Validate ExpectedBehaviorContract via Pydantic
         
-        CLI->>Box: execute_and_trace(runner_script, pkg_dir)
-        Box->>Box: Execute inside bwrap and trace syscalls
-        Box-->>CLI: Return observed trace (files, network, binaries)
+        CLI->>Sandbox: execute_and_trace(runner_script, pkg_dir)
+        Sandbox->>Sandbox: Execute inside bwrap and trace syscalls
+        Sandbox-->>CLI: Return observed trace (files, network, binaries)
         
         CLI->>Arb: calculate_drift(contract, observed_trace)
         Arb->>Arb: Compute composite drift score
