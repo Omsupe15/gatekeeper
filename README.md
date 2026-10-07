@@ -173,37 +173,37 @@ In Gatekeeper, the AI is **not** an all-powerful, unconstrained decision maker. 
 ```mermaid
 graph TD
     subgraph INGESTION["1. Ingestion Layer"]
-        A[Target Package Directory / Tarball] --> B[PackageExtractor]
-        B --> C[Manifest Metadata: package.json / setup.py]
-        B --> D[Target Lifecycle Script: postinstall.sh]
+        A["Target Package Directory / Tarball"] --> B["PackageExtractor"]
+        B --> C["Manifest Metadata (package.json / setup.py)"]
+        B --> D["Target Lifecycle Script (postinstall.sh)"]
     end
 
     subgraph NEURO_SYMBOLIC["2. Neuro-Symbolic Intent Layer"]
-        C --> E[LocalIntentAnalyzer]
+        C --> E["LocalIntentAnalyzer"]
         D --> E
-        E --> F[Ollama Local Daemon :11434]
-        F --> G[Qwen2.5-Coder:7B Engine]
-        G --> H[Pydantic Validation: ExpectedBehaviorContract]
+        E --> F["Ollama Local Daemon (:11434)"]
+        F --> G["Qwen2.5-Coder 7B Engine"]
+        G --> H["Pydantic Validation (ExpectedBehaviorContract)"]
     end
 
     subgraph KERNEL_SANDBOX["3. Kernel Sandbox Layer"]
-        D --> I[KernelSandbox Runner]
-        I --> J[Bubblewrap bwrap Namespace Isolation]
-        J --> K[strace Filtered Interceptor: openat, connect, execve]
-        K --> L[Syscall Telemetry Parser]
+        D --> I["KernelSandbox Runner"]
+        I --> J["Bubblewrap bwrap Namespace Isolation"]
+        J --> K["strace Filtered Interceptor (openat, connect, execve)"]
+        K --> L["Syscall Telemetry Parser"]
     end
 
     subgraph ARBITRATION["4. Differential Arbitration Layer"]
-        H --> M[DriftArbitrator Engine]
+        H --> M["DriftArbitrator Engine"]
         L --> M
-        M --> N[Vector Drift Calculation: D_net, D_fs, D_proc]
-        N --> O{Drift Score >= 0.40?}
+        M --> N["Vector Drift Calculation (D_net, D_fs, D_proc)"]
+        N --> O{"Drift Score >= 0.40?"}
     end
 
     subgraph ENFORCEMENT["5. Enforcement & Presentation Layer"]
-        O -- Yes --> P[QUARANTINE - Exit Code 1]
-        O -- No --> Q[ALLOW - Exit Code 0]
-        P --> R[Rich Terminal Dashboard & Forensic Audit Table]
+        O -- Yes --> P["QUARANTINE (Exit Code 1)"]
+        O -- No --> Q["ALLOW (Exit Code 0)"]
+        P --> R["Rich Terminal Dashboard & Forensic Audit Table"]
         Q --> R
     end
 ```
@@ -306,33 +306,33 @@ sequenceDiagram
     actor User as Developer / CI Runner
     participant CLI as Gatekeeper CLI
     participant Ext as PackageExtractor
-    participant Ollama as Ollama (Qwen2.5-Coder:7B)
-    participant Box as KernelSandbox (bwrap + strace)
+    participant Ollama as Ollama Engine
+    participant Box as KernelSandbox
     participant Arb as DriftArbitrator
 
-    User->>CLI: gatekeeper run ./target-package/
-    CLI->>Ext: extract_context("./target-package/")
-    Ext-->>CLI: metadata, source_code, runner_script
+    User->>CLI: Run gatekeeper on package directory
+    CLI->>Ext: extract_context(pkg_dir)
+    Ext-->>CLI: Return metadata, source_code, runner_script
     
     alt No Lifecycle Hook Present
         CLI-->>User: Exit Code 0 (No install execution)
     else Lifecycle Hook Detected
-        CLI->>Ollama: POST /api/generate (format="json", prompt)
-        Ollama-->>CLI: raw_json
-        CLI->>CLI: Pydantic Validation -> ExpectedBehaviorContract
+        CLI->>Ollama: POST /api/generate with prompt and schema
+        Ollama-->>CLI: Return raw JSON response
+        CLI->>CLI: Validate ExpectedBehaviorContract via Pydantic
         
         CLI->>Box: execute_and_trace(runner_script, pkg_dir)
-        Box->>Box: Run bwrap + strace (-e openat,connect,execve)
-        Box-->>CLI: observed_trace {files, network, binaries}
+        Box->>Box: Execute inside bwrap and trace syscalls
+        Box-->>CLI: Return observed trace (files, network, binaries)
         
         CLI->>Arb: calculate_drift(contract, observed_trace)
-        Arb->>Arb: Evaluate D = 0.45(D_net) + 0.35(D_fs) + 0.20(D_proc)
-        Arb-->>CLI: drift_score, violations_list
+        Arb->>Arb: Compute composite drift score
+        Arb-->>CLI: Return drift_score and violations
         
-        alt drift_score >= 0.40
-            CLI-->>User: Display Red Forensic Alert -> Exit Code 1 (QUARANTINE)
-        else drift_score < 0.40
-            CLI-->>User: Display Green Nominal Card -> Exit Code 0 (ALLOW)
+        alt Drift Score >= 0.40 (Critical Drift)
+            CLI-->>User: Quarantine Package (Exit Code 1)
+        else Drift Score below 0.40 (Nominal)
+            CLI-->>User: Allow Package (Exit Code 0)
         end
     end
 ```
