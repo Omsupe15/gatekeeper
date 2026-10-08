@@ -63,6 +63,18 @@
 
 ---
 
+## **Team Details**
+
+- **Team Name** : Team Lanterns
+- **Problem Statement** : 1. Best Open Source AI Project.
+- **Team Members**:
+  - **Om Supe**
+  - **Aditya Umak**
+  - **Aaditya Gupta**
+  - **Advait Palve**
+
+
+
 ## 🏷️ 1. Project Name
 
 **Gatekeeper** (*SysDrift Canary*)  
