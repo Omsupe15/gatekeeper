@@ -40,6 +40,7 @@ from sandbox.log_parser import (
     parse_line,
     parse_trace,
     parse_trace_file,
+    validate_observed_trace,
 )
 from sandbox.tracer import (
     SandboxReport,
@@ -76,6 +77,7 @@ __all__ = [
     "parse_line",
     "extract_observed_trace",
     "extract_observed_trace_model",
+    "validate_observed_trace",
 
     # Exceptions
     "SandboxError",

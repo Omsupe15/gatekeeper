@@ -68,6 +68,8 @@ class SandboxReport:
 
     def to_observed_kernel_trace(self) -> Dict[str, Any]:
         """Return the telemetry dictionary formatted for the arbitrator."""
+        from sandbox.log_parser import validate_observed_trace
+        self.telemetry = validate_observed_trace(self.telemetry)
         return self.telemetry
 
     def to_observed_kernel_trace_model(self) -> Any:
