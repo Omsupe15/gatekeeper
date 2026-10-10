@@ -22,3 +22,8 @@ dist/
 # Operating System files
 .DS_Store
 Thumbs.db
+
+# Generated execution wrappers
+.sysdrift_*.sh
+*.sysdrift_*.sh
+

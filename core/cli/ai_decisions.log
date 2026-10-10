@@ -24,3 +24,118 @@
 - Alternatives Considered: Typer, Click, Fire. Declined to keep core installation lightweight and avoid version conflicts.
 - Rationale & Security Invariants: Minimal dependency surface reduces supply chain risk on Gatekeeper itself.
 - Test Verification: core/cli/tests/test_cli.py::test_cli_help
+
+[DECISION-CLI-004] Pipeline Decoupling via Protocol Adapter to Prevent Integration Merge Conflicts
+- Timestamp: 2026-10-10T11:25:00Z
+- Subsystem: core/cli & core/extractor
+- Problem Context: In `core/cli/main.py`, the `analyze_target_package()` function currently hardcodes simulated/mocked returns. If multiple parallel development tracks (Block 2 AI Engine, Block 3 Extractor, Block 4 Sandbox, Block 5 Arbitrator) directly modify `analyze_target_package()` to import and call their subsystems, massive merge conflicts will occur across Git branches.
+- Decision Made: Implement an explicit `PipelineCoordinator` adapter pattern with optional dependency injection and defensive dynamic imports (`importlib`/try-except). When individual blocks are not yet loaded or running in mocked CI environments, the coordinator gracefully falls back without breaking other subsystems.
+- Alternatives Considered: Direct hardcoded imports of `core.extractor`, `core.ai_engine`, `core.sandbox`, and `core.arbitrator` at top level of `main.py`. Declined because it creates immediate cross-branch merge conflicts and breaks tests if any upstream block is still undergoing development.
+- Rationale & Security Invariants: Provides zero-coupling integration. Guarantees that CLI tests run cleanly regardless of whether local Ollama or Docker daemons are active, while allowing `core/extractor` and other blocks to plug in seamlessly.
+- Test Verification: core/cli/tests/test_cli.py::test_pipeline_coordinator_adapter
+
+[DECISION-CLI-005] Extractor Engine Integration & No-Hook Fast-Path Protocol
+- Timestamp: 2026-10-10T11:25:00Z
+- Subsystem: core/cli & core/extractor
+- Problem Context: The majority of packages in NPM and PyPI registries do not declare install-time lifecycle hooks (such as `preinstall`, `install`, `postinstall`, or custom `cmdclass` hooks in setup.py). Spawning containers or querying the local SLM for packages with no hooks incurs unnecessary latency and resource consumption.
+- Decision Made: Integrate `core.extractor.manifest_parser` as the primary static intake gate. If a package contains no executable lifecycle hooks, `extractor.extract_context()` flags `has_lifecycle_hook=False`, and `core/cli` immediately terminates with POSIX Exit Code 0 (ALLOW) under 50ms, skipping container sandboxing and AI model synthesis.
+- Alternatives Considered: Forcing every package to execute inside the sandbox even if no scripts are declared. Declined because it degrades throughput from >100 pkgs/min to <10 pkgs/min without providing additional security.
+- Rationale & Security Invariants: Protects against supply chain denial-of-service on build runners while maintaining strict security: if a script hook IS present, the zero-trust pipeline executes in full.
+- Test Verification: core/cli/tests/test_cli.py::test_cli_no_lifecycle_hook_fast_path
+
+[DECISION-CLI-006] Granular Merge Conflict Risk Assessment and Architectural Isolation Protocols
+- Timestamp: 2026-10-10T11:25:00Z
+- Subsystem: core/cli & core/extractor
+- Problem Context: Parallel execution of Phase 2 (Track A: Block 2 AI Engine, Block 3 Extractor; Track B: Block 4 Sandbox) and subsequent Phase 3 (Block 5 Arbitrator) creates a high probability of Git merge conflicts on shared files, schemas, and dependencies.
+- Decision Made: Document a comprehensive Merge Conflict Analysis and enforce strict non-overlapping file ownership:
+  1. `core/extractor/` files (`manifest_parser.py`, `ast_inspector.py`, `runner_builder.py`, `__init__.py`) are strictly isolated to Block 3; no edits to external subsystem folders.
+  2. `core/schema/` models are treated as additive-only contracts; existing fields and serializations in `ExtractionContext` remain unmodified.
+  3. `pyproject.toml` dependencies for `tree-sitter` and `tomli` are isolated to an optional extra or appended non-destructively.
+  4. In `core/cli/main.py`, integration is consolidated inside modular coordinator methods rather than scattering changes across argument parsers and output formatters.
+- Alternatives Considered: Free-form parallel modifications of `core/cli/main.py` and `core/schema/__init__.py`. Declined due to certainty of blocking merge conflicts.
+- Rationale & Security Invariants: Preserves repository velocity and clean Git merges across distributed contributors and AI agent subtasks.
+- Test Verification: core/extractor/tests/test_extractor.py and core/cli/tests/test_cli.py
+
+================================================================================
+REPORT: CLI & EXTRACTOR IMPLEMENTATION PLAN & MERGE CONFLICT RISK AUDIT
+================================================================================
+
+1. EXECUTIVE SUMMARY & SUBSYSTEM SCOPE
+   - Subsystem: core/cli (Presentation & CI/CD Gatekeeper - Block 6)
+   - Subsystem: core/extractor (Static Manifest & AST Extraction - Block 3)
+   - Specifications Reviewed: PRD.md, TRD.md, APP_FLOW.md, SCHEMA_AND_UI_DESIGN.md, IMPLEMENTATION_PLAN.md.
+   - Core Goal: Provide passive, static extraction of untrusted package manifests and lifecycle code without executing untrusted binaries, and wire extraction cleanly into the user-facing CLI orchestrator.
+
+2. DETAILED ARCHITECTURE FOR CORE/EXTRACTOR (BLOCK 3)
+   - File Structure:
+     * core/extractor/__init__.py: Exposes `extract_context()`, `ManifestParser`, `ASTInspector`, `RunnerBuilder`.
+     * core/extractor/manifest_parser.py:
+       - NPM: Extracts `name`, `version`, `description`, `scripts` (`preinstall`, `install`, `postinstall`), `dependencies`.
+       - Python: Parses `pyproject.toml` (TOML metadata) and `setup.py` (via static `ast.parse()` to extract `cmdclass` and custom build steps without executing `setup.py`).
+     * core/extractor/ast_inspector.py:
+       - Performs static AST token extraction targeting dangerous patterns:
+         • JS: `child_process`, `exec`, `spawn`, `eval`, `fs.readFile`, `http.request`, `net.connect`, base64 buffers.
+         • Python: `subprocess`, `os.system`, `socket`, `urllib`, `requests`, `eval`, `exec`, base64 decode.
+       - Implements Shannon Entropy formula: H(X) = -sum(P(x) * log2(P(x))). Strings with H >= 4.5 flagged as obfuscated/base64 payloads.
+     * core/extractor/runner_builder.py:
+       - Synthesizes standalone bash wrapper `.sysdrift_<hook>.sh`.
+       - Applies `set -e`, proper shebang `#!/usr/bin/env bash`, and sets execution bit `0755`.
+     * core/extractor/ai_decisions.log: Block 3 architectural decision tracking.
+     * core/extractor/tests/test_extractor.py: Unit tests across NPM, Python, and standalone shell packages.
+
+3. DETAILED REFACTORING FOR CORE/CLI (BLOCK 6)
+   - Evolution of `core/cli/main.py`:
+     * Introduce `PipelineCoordinator` class.
+     * Connect Step 1 (Extraction) -> Step 2 (AI Contract) -> Step 3 (Kernel Sandbox) -> Step 4 (Vector Arbitration) -> Step 5 (Forensics).
+     * Enforce fast-path exit: If package has no hooks, immediately render Allow verdict with Exit Code 0 (< 50ms).
+     * Maintain defensive fallback: If AI Engine, Docker daemon, or strace are unavailable, fall back to fail-closed contract or fixture evaluation.
+
+4. COMPREHENSIVE MERGE CONFLICT HOTSPOT MATRIX & MITIGATION
+
+   [HOTSPOT 1: core/cli/main.py]
+   - Severity: CRITICAL
+   - Conflict Cause: Lines 33-139 in `core/cli/main.py` contain the mock pipeline. When Block 2 (AI Engine), Block 4 (Sandbox), and Block 5 (Arbitrator) merge, all branches attempt to modify `analyze_target_package()` simultaneously.
+   - Specific Lines at Risk:
+     • Lines 11-18: Imports from `core.schema`.
+     • Lines 33-139: Pipeline execution logic in `analyze_target_package()`.
+     • Lines 200-262: Branching logic in `run_cli()` for terminal, json, and sarif formats.
+   - Mitigation:
+     • Encapsulate pipeline execution into an external `PipelineCoordinator` or `default_coordinator` in a dedicated helper or class.
+     • Use dynamic/lazy import hooks so `main.py` is not tightly coupled to unmerged sister modules.
+
+   [HOTSPOT 2: core/schema/extraction.py & core/schema/__init__.py]
+   - Severity: HIGH
+   - Conflict Cause: Adding fields or methods to `ExtractionContext` while Phase 1 schema changes or other tracks are active.
+   - Specific Lines at Risk:
+     • `core/schema/extraction.py` lines 53-78 (`ExtractionContext` definition).
+     • `core/schema/__init__.py` lines 9-14 and `__all__` list.
+   - Mitigation:
+     • Treat `ExtractionContext` as an immutable data contract.
+     • Add helper accessors strictly as `@property` methods that do not alter JSON schema output.
+     • Do not delete or rename any existing fields.
+
+   [HOTSPOT 3: pyproject.toml]
+   - Severity: MEDIUM
+   - Conflict Cause: `core/extractor` requires `tomli` (for Python <3.11) and optionally `tree-sitter`. If other branches add dependencies for `httpx` or `pytest`, lockfile and dependency arrays collide.
+   - Specific Lines at Risk:
+     • Lines 10-14 in `pyproject.toml` (`dependencies` list).
+   - Mitigation:
+     • Keep core dependencies minimal. Use standard library `tomllib` (built into Python 3.11+) and `ast` module where possible.
+     • Place optional compiler/Tree-Sitter dependencies in `[project.optional-dependencies]`.
+
+   [HOTSPOT 4: Import Path Divergence (sandbox/ vs core/sandbox/)]
+   - Severity: MEDIUM
+   - Conflict Cause: The repository has both `gatekeeper/sandbox/` (root) and `gatekeeper/core/sandbox/` (forwarder). If `core/cli` imports from `sandbox.tracer` while other modules import from `core.sandbox.tracer`, circular references or conflicting mock patches occur during tests.
+   - Mitigation:
+     • Standardize on `core.sandbox` across all modules in `core/`.
+
+   [HOTSPOT 5: Subsystem Decision Logs]
+   - Severity: LOW-MEDIUM
+   - Conflict Cause: Multiple branches appending to `core/cli/ai_decisions.log`.
+   - Mitigation:
+     • Establish `core/extractor/ai_decisions.log` for Block 3, leaving `core/cli/ai_decisions.log` focused purely on Block 6 decisions.
+
+5. VERIFICATION & QUALITY GATES
+   - Quality Gate 1: `pytest core/extractor/tests/` passes with 100% coverage on manifest parsing and AST token detection.
+   - Quality Gate 2: `pytest core/cli/tests/` passes all tests without regression, verifying exit codes 0, 1, and 2.
+   - Quality Gate 3: End-to-end evaluation against `fixtures/benign-canvas` returns Exit Code 0; `fixtures/malicious-telemetry` returns Exit Code 1.

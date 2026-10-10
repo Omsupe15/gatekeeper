@@ -1,11 +1,14 @@
-"""
-Unit and integration tests for Gatekeeper CLI subsystem (core/cli).
-Verifies exit codes, CLI flags, JSON/SARIF reporters, and UI rendering.
+"""Unit and integration tests for Gatekeeper CLI subsystem (core/cli).
+
+Verifies exit codes, CLI flags, JSON/SARIF reporters, UI rendering,
+no-hook fast-paths, and the decoupled PipelineCoordinator adapter.
 """
 
 import json
+from pathlib import Path
 import pytest
-from core.cli.main import run_cli
+
+from core.cli.main import PipelineCoordinator, analyze_target_package, run_cli
 
 
 def test_cli_help(capsys):
@@ -79,3 +82,51 @@ def test_cli_sarif_export(tmp_path):
     run_data = content["runs"][0]
     assert run_data["tool"]["driver"]["name"] == "Gatekeeper"
     assert len(run_data["results"]) > 0
+
+
+def test_cli_no_lifecycle_hook_fast_path(tmp_path):
+    """Verifies fast-path exit 0 for packages with no install-time lifecycle hooks."""
+    pkg_dir = tmp_path / "pure-library"
+    pkg_dir.mkdir()
+    (pkg_dir / "package.json").write_text(
+        json.dumps({
+            "name": "pure-library",
+            "version": "1.0.0",
+            "scripts": {
+                "test": "jest",
+                "lint": "eslint .",
+            },
+        })
+    )
+
+    exit_code = run_cli([str(pkg_dir), "--format=terminal"])
+    assert exit_code == 0
+
+
+def test_pipeline_coordinator_adapter(tmp_path):
+    """Verifies that PipelineCoordinator allows dependency injection without merge conflicts."""
+    pkg_dir = tmp_path / "custom-pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "package.json").write_text('{"name": "custom-pkg"}')
+
+    # Custom coordinator that simulates an external AI/sandbox engine
+    coordinator = PipelineCoordinator(
+        has_hooks_fn=lambda path: False,
+    )
+    contract, trace, drift, forensic = coordinator.analyze(str(pkg_dir))
+    assert drift.composite_drift_score == 0.00
+    assert drift.is_quarantined is False
+    assert forensic is None
+
+
+def test_cli_real_fixtures():
+    """Verifies execution against repository fixtures in fixtures/."""
+    benign_path = Path("fixtures/benign-canvas")
+    if benign_path.exists():
+        exit_code = run_cli([str(benign_path), "--format=terminal"])
+        assert exit_code == 0
+
+    malicious_path = Path("fixtures/malicious-telemetry")
+    if malicious_path.exists():
+        exit_code = run_cli([str(malicious_path), "--format=terminal"])
+        assert exit_code == 1

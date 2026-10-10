@@ -1,0 +1,38 @@
+# Gatekeeper Architecture & Engineering Decision Log
+# Module: Block 3 - Static Manifest & AST Code Extraction (core/extractor/)
+
+[DECISION-EXTRACT-001] Passive Static Parsing over Dynamic Dry-Run Execution
+- Timestamp: 2026-10-10T11:35:00Z
+- Subsystem: core/extractor
+- Problem Context: Some analysis tools invoke `node -e "require('./package.json')"` or `python setup.py --dry-run` to inspect package metadata and dependencies.
+- Decision Made: Strictly prohibit any process execution during extraction. Manifests are parsed purely via `json.load`, `tomllib`, and Python `ast.parse()`.
+- Alternatives Considered: Using subprocess to query `setup.py egg_info` or `npm pkg get`. Declined because executing untrusted package scripts before the kernel sandbox is active allows immediate host compromise.
+- Rationale & Security Invariants: Zero-trust passive inspection guarantee: untrusted code cannot execute outside the kernel sandbox under any circumstance.
+- Test Verification: core/extractor/tests/test_extractor.py::test_passive_setup_py_parsing
+
+[DECISION-EXTRACT-002] Lifecycle Hook Precedence & Fast-Path Protocol
+- Timestamp: 2026-10-10T11:35:00Z
+- Subsystem: core/extractor
+- Problem Context: NPM packages can declare multiple scripts (`preinstall`, `install`, `postinstall`).
+- Decision Made: Enforce execution precedence: `preinstall` -> `install` -> `postinstall`. If no lifecycle hooks exist, flag `has_lifecycle_hook=False` to trigger CLI fast-path exit 0.
+- Alternatives Considered: Concatenating all scripts into a single large runner or prompting user. Declined to align with npm standard lifecycle execution semantics.
+- Rationale & Security Invariants: Prevents script evasion where malicious code hides in `preinstall` while `install` appears benign.
+- Test Verification: core/extractor/tests/test_extractor.py::test_npm_hook_precedence
+
+[DECISION-EXTRACT-003] Shannon Entropy Calculation for Obfuscation & Base64 Detection
+- Timestamp: 2026-10-10T11:35:00Z
+- Subsystem: core/extractor
+- Problem Context: Malicious lifecycle hooks frequently hide socket exfiltration payloads in base64 strings or hex arrays to evade simple regex matching.
+- Decision Made: Implement mathematical Shannon entropy H(X) = -sum(P(x) * log2(P(x))) over string literals (length >= 20), flagging literals with H >= 4.5 as suspicious high-entropy tokens.
+- Alternatives Considered: Simple regex searching for "==" padding. Declined because short hex strings or base64 without padding evade regex.
+- Rationale & Security Invariants: Deterministic mathematical heuristic surfaces obfuscated payloads regardless of string encoding tricks.
+- Test Verification: core/extractor/tests/test_extractor.py::test_shannon_entropy_detection
+
+[DECISION-EXTRACT-004] Hermetic Shell Wrapper Generation (.sysdrift_<hook>.sh)
+- Timestamp: 2026-10-10T11:35:00Z
+- Subsystem: core/extractor
+- Problem Context: Inline JSON strings (e.g. `python3 -c "import socket..."`) cannot be directly passed to Bubblewrap or Docker without shell quoting errors or escaping issues.
+- Decision Made: Generate a standalone executable bash script `.sysdrift_<hook>.sh` with `set -e` and POSIX mode 0755 in the package workspace.
+- Alternatives Considered: Passing inline commands via `bash -c "<cmd>"`. Declined due to shell escaping vulnerabilities and multi-line script breakage.
+- Rationale & Security Invariants: Guarantees deterministic execution fidelity inside the kernel sandbox and prevents shell injection escapes on the host.
+- Test Verification: core/extractor/tests/test_extractor.py::test_runner_builder_script_creation
