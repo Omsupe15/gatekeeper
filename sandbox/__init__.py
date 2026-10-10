@@ -44,6 +44,7 @@ from sandbox.log_parser import (
 from sandbox.tracer import (
     SandboxReport,
     SyscallTracer,
+    run_package,
     run_trace,
     trace_execution,
 )
@@ -66,6 +67,7 @@ __all__ = [
     # Tracing orchestrator & reports
     "SyscallTracer",
     "SandboxReport",
+    "run_package",
     "trace_execution",
     "run_trace",
     # Log parser

@@ -200,7 +200,7 @@ class SyscallTracer:
                 "-s",
                 "512",
                 "-e",
-                "trace=openat,connect,execve",
+                "trace=open,openat,openat2,creat,connect,execve,execveat",
                 "-o",
                 trace_file_host,
                 "--",
@@ -265,7 +265,7 @@ class SyscallTracer:
                 "-s",
                 "512",
                 "-e",
-                "trace=openat,connect,execve",
+                "trace=open,openat,openat2,creat,connect,execve,execveat",
                 "-o",
                 container_trace_file,
                 "--",
@@ -386,6 +386,42 @@ def trace_execution(
         script_path=script_path,
         workspace_dir=workspace_dir,
         writable_output_dir=writable_output_dir,
+    )
+
+
+def run_package(
+    package_dir: str,
+    lifecycle_script: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    image: str = DEFAULT_SANDBOX_IMAGE,
+    writable_output_dir: Optional[str] = None,
+    backend: str = "auto",
+) -> SandboxReport:
+    """Execute an approved package lifecycle script without reading package metadata.
+
+    The caller is responsible for analyzing README and package metadata before this
+    handoff. The sandbox only validates that the selected script belongs to the
+    mounted package directory, then traces its isolated execution.
+    """
+    valid_package_dir = validate_host_path(package_dir, must_exist=True)
+    script_candidate = lifecycle_script
+    if not os.path.isabs(script_candidate):
+        script_candidate = os.path.join(valid_package_dir, script_candidate)
+    valid_script = validate_host_path(script_candidate, must_exist=True)
+
+    try:
+        if os.path.commonpath((valid_package_dir, valid_script)) != valid_package_dir:
+            raise ValueError("Lifecycle script must be inside the package directory.")
+    except ValueError as exc:
+        raise ValueError("Lifecycle script must be inside the package directory.") from exc
+
+    return trace_execution(
+        script_path=valid_script,
+        workspace_dir=valid_package_dir,
+        timeout=timeout,
+        image=image,
+        writable_output_dir=writable_output_dir,
+        backend=backend,
     )
 
 

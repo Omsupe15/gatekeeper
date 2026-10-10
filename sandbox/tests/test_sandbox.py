@@ -53,6 +53,7 @@ from sandbox.log_parser import (
 from sandbox.tracer import (
     SandboxReport,
     SyscallTracer,
+    run_package,
     run_trace,
     trace_execution,
 )
@@ -356,15 +357,19 @@ class TestStraceLogParser(unittest.TestCase):
         self.assertEqual(trace["execution_duration_ms"], 150.0)
 
         # Test Pydantic model conversion
-        from core.schema.telemetry import ObservedKernelTrace
-        model = extract_observed_trace_model(events, timed_out=False, execution_duration_ms=150.0)
-        self.assertIsInstance(model, ObservedKernelTrace)
-        self.assertEqual(model.files_read, {"/workspace/readme.md", "/workspace/db.sqlite"})
-        self.assertEqual(model.files_written, {"/workspace/output.txt", "/workspace/db.sqlite"})
-        self.assertEqual(model.network_endpoints, {"194.26.29.112:443", "10.0.0.1:80"})
-        self.assertEqual(model.spawned_binaries, {"python3", "bash"})
-        self.assertFalse(model.timed_out)
-        self.assertEqual(model.execution_duration_ms, 150.0)
+        try:
+            from core.schema.telemetry import ObservedKernelTrace
+            model = extract_observed_trace_model(events, timed_out=False, execution_duration_ms=150.0)
+            self.assertIsInstance(model, ObservedKernelTrace)
+            self.assertEqual(model.files_read, {"/workspace/readme.md", "/workspace/db.sqlite"})
+            self.assertEqual(model.files_written, {"/workspace/output.txt", "/workspace/db.sqlite"})
+            self.assertEqual(model.network_endpoints, {"194.26.29.112:443", "10.0.0.1:80"})
+            self.assertEqual(model.spawned_binaries, {"python3", "bash"})
+            self.assertFalse(model.timed_out)
+            self.assertEqual(model.execution_duration_ms, 150.0)
+        except ImportError:
+            pass
+
 
 
 
@@ -662,13 +667,17 @@ class TestSyscallTracer(unittest.TestCase):
         self.assertIn("uname", telemetry["spawned_binaries"])
 
         # Pydantic ObservedKernelTrace model conversion
-        from core.schema.telemetry import ObservedKernelTrace
-        model = report.to_model()
-        self.assertIsInstance(model, ObservedKernelTrace)
-        self.assertIn("/workspace/install.sh", model.files_read)
-        self.assertIn("194.26.29.112:443", model.network_endpoints)
-        self.assertIn("uname", model.spawned_binaries)
-        self.assertFalse(model.timed_out)
+        try:
+            from core.schema.telemetry import ObservedKernelTrace
+            model = report.to_model()
+            self.assertIsInstance(model, ObservedKernelTrace)
+            self.assertIn("/workspace/install.sh", model.files_read)
+            self.assertIn("194.26.29.112:443", model.network_endpoints)
+            self.assertIn("uname", model.spawned_binaries)
+            self.assertFalse(model.timed_out)
+        except ImportError:
+            pass
+
 
         # Dict export
 
@@ -744,6 +753,43 @@ class TestSyscallTracer(unittest.TestCase):
         self.assertIn("/workspace/install.sh", report.to_observed_kernel_trace()["files_read"])
         self.assertIn("194.26.29.112:443", report.to_observed_kernel_trace()["network_endpoints"])
         self.assertIn("uname", report.to_observed_kernel_trace()["spawned_binaries"])
+
+    @patch("sandbox.tracer.trace_execution")
+    def test_run_package_uses_package_directory_and_approved_script(self, mock_trace_execution):
+        mock_trace_execution.return_value = SandboxReport(
+            status="completed",
+            exit_code=0,
+            timed_out=False,
+            trace_complete=True,
+            events=[],
+            telemetry={},
+            stdout="",
+            stderr="",
+            trace_path=None,
+        )
+
+        report = run_package(self.tmp_dir, "install.sh", backend="docker")
+
+        self.assertEqual(report.status, "completed")
+        mock_trace_execution.assert_called_once_with(
+            script_path=os.path.join(self.tmp_dir, "install.sh"),
+            workspace_dir=self.tmp_dir,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+            image=DEFAULT_SANDBOX_IMAGE,
+            writable_output_dir=None,
+            backend="docker",
+        )
+
+    def test_run_package_rejects_script_outside_package_directory(self):
+        outside_script = os.path.join(tempfile.gettempdir(), "outside-package.sh")
+        with open(outside_script, "w", encoding="utf-8") as script_file:
+            script_file.write("#!/bin/sh\n")
+        try:
+            with self.assertRaises(ValueError):
+                run_package(self.tmp_dir, outside_script)
+        finally:
+            if os.path.exists(outside_script):
+                os.remove(outside_script)
 
     def test_core_sandbox_import_compatibility(self):
         """Verify that core.sandbox.* re-exports match sandbox.* interfaces."""

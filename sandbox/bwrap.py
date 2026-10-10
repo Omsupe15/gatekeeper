@@ -38,7 +38,7 @@ _SENSITIVE_HOST_PATTERNS = (
     "master.key",
 )
 
-DEFAULT_SANDBOX_IMAGE = os.environ.get("GATEKEEPER_SANDBOX_IMAGE", "alpine:latest")
+DEFAULT_SANDBOX_IMAGE = os.environ.get("GATEKEEPER_SANDBOX_IMAGE", "gatekeeper-sandbox:latest")
 DEFAULT_DOCKER_BIN = os.environ.get("DOCKER_BIN", "docker")
 DEFAULT_BWRAP_BIN = os.environ.get("BWRAP_BIN", "bwrap")
 DEFAULT_TIMEOUT_SECONDS = 20.0
