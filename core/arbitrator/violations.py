@@ -85,3 +85,19 @@ def create_timeout_violation(
         ),
         offending_artifact=f"timeout_{int(timeout_seconds)}s",
     )
+
+
+def create_syscall_cache_violation(
+    syscall: str,
+    severity: str = SeverityLevel.CRITICAL.value,
+) -> ViolationRecord:
+    """Create a violation for a syscall present in the suspicious syscall cache."""
+    return ViolationRecord(
+        dimension=SecurityDimension.PROCESS,
+        severity=severity,
+        description=(
+            f"Suspicious syscall '{syscall}' detected: syscall is present in the Gatekeeper cache"
+        ),
+        offending_artifact=syscall,
+    )
+

@@ -32,6 +32,14 @@ class ObservedKernelTrace(BaseModel):
         default_factory=set,
         description="Set of executable basenames captured from execve syscalls",
     )
+    syscalls: Set[str] = Field(
+        default_factory=set,
+        description="Set of syscall names observed in the strace log",
+    )
+    flagged_syscalls: Set[str] = Field(
+        default_factory=set,
+        description="Observed syscall names present in the suspicious syscall cache",
+    )
     timed_out: bool = Field(
         default=False,
         description="Whether the sandbox execution reached the 20-second timeout limit",

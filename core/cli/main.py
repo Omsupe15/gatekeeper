@@ -323,14 +323,17 @@ def run_cli(
 
     # Execute Analysis
     analysis_coordinator = coordinator
+    progress_callback = None
     if parsed.monitor:
         def progress_callback(stage: str, detail: str) -> None:
             c.print(f"[bold cyan][{stage}][/bold cyan] {detail}")
 
-        if analysis_coordinator is None:
-            analysis_coordinator = PipelineCoordinator(status_callback=progress_callback)
-        elif hasattr(analysis_coordinator, "status_callback"):
-            analysis_coordinator.status_callback = progress_callback
+    if analysis_coordinator is None:
+        analysis_coordinator = PipelineCoordinator(
+            status_callback=progress_callback,
+        )
+    elif parsed.monitor and hasattr(analysis_coordinator, "status_callback"):
+        analysis_coordinator.status_callback = progress_callback
 
     try:
         if parsed.format == "terminal":

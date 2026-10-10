@@ -6,6 +6,7 @@ TRD Block 4 requirements, schema contracts, and isolation boundaries.
 
 import os
 import unittest
+from unittest.mock import patch
 from core.sandbox import (
     DockerSandbox,
     BubblewrapSandbox,
@@ -84,8 +85,18 @@ class TestCoreSandboxModuleContracts(unittest.TestCase):
         self.assertEqual(model.files_read, {"/etc/passwd"})
         self.assertEqual(model.network_endpoints, {"194.26.29.112:443"})
         self.assertEqual(model.spawned_binaries, {"curl"})
+        self.assertEqual(model.syscalls, {"openat", "connect", "execve"})
+        self.assertEqual(model.flagged_syscalls, set())
         self.assertFalse(model.timed_out)
         self.assertEqual(model.execution_duration_ms, 42.5)
+
+    @patch("sandbox.log_parser.load_syscall_cache", return_value={"ptrace"})
+    def test_syscall_cache_flags_observed_syscall(self, mock_cache):
+        """Verify parsed syscall names are matched against the suspicious cache."""
+        telemetry = extract_observed_trace([{"syscall": "ptrace"}])
+
+        self.assertEqual(telemetry["syscalls"], {"ptrace"})
+        self.assertEqual(telemetry["flagged_syscalls"], {"ptrace"})
 
     def test_core_sandbox_bwrap_direct_import(self):
         """Verify direct import from core.sandbox.bwrap."""

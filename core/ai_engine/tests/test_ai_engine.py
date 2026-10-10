@@ -108,6 +108,20 @@ async def test_ollama_client_check_health_connection_error():
 
 
 @pytest.mark.asyncio
+async def test_ollama_client_caches_health_result():
+    """Verify repeated health checks do not issue repeated HTTP requests."""
+    client = OllamaClient()
+    with patch("httpx.AsyncClient.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
+
+        assert await client.check_health() is True
+        assert await client.check_health() is True
+        mock_get.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_ollama_client_resolve_active_model():
     """Verify dynamic model resolution against available local tags."""
     client = OllamaClient(model="qwen3:8b")
@@ -116,6 +130,25 @@ async def test_ollama_client_resolve_active_model():
     ):
         resolved = await client.resolve_active_model()
         assert resolved == "qwen3:8b-instruct-q4_0"
+
+
+@pytest.mark.asyncio
+async def test_ollama_client_resolves_default_model_once():
+    """Verify repeated requests reuse the model resolved during the first request."""
+    client = OllamaClient()
+    with patch.object(
+        client, "get_available_models", AsyncMock(return_value=["qwen3:8b"])
+    ) as mock_models, patch("httpx.AsyncClient.post") as mock_post:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"message": {"content": "{}"}}
+        mock_post.return_value = mock_resp
+
+        messages = [{"role": "user", "content": "Hello"}]
+        await client.chat(messages)
+        await client.chat(messages)
+
+        mock_models.assert_awaited_once()
 
 
 @pytest.mark.asyncio

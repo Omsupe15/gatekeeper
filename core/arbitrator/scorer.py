@@ -21,6 +21,7 @@ from core.arbitrator.violations import (
     create_network_violation,
     create_prefix_violation,
     create_process_violation,
+    create_syscall_cache_violation,
     create_timeout_violation,
 )
 from core.schema.arbitration import DriftResult, SeverityLevel, ViolationRecord
@@ -279,7 +280,14 @@ class DriftArbitrator:
         )
         d_proc, proc_violations = evaluate_process_drift(contract, trace)
 
-        all_violations = net_violations + fs_violations + proc_violations
+        syscall_violations = [
+            create_syscall_cache_violation(syscall)
+            for syscall in sorted(trace.flagged_syscalls)
+        ]
+        if syscall_violations:
+            d_proc = 1.0
+
+        all_violations = net_violations + fs_violations + proc_violations + syscall_violations
 
         # Handle timing bomb / sandbox timeout penalty
         if trace.timed_out:
@@ -298,6 +306,8 @@ class DriftArbitrator:
         if has_credential_leak:
             raw_composite = max(raw_composite, self.threshold)
         if trace.timed_out:
+            raw_composite = max(raw_composite, self.threshold)
+        if syscall_violations:
             raw_composite = max(raw_composite, self.threshold)
 
         composite_score = min(1.0, max(0.0, round(raw_composite, 4)))

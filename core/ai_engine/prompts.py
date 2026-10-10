@@ -12,6 +12,17 @@ from core.schema.arbitration import ViolationRecord
 from core.schema.extraction import ExtractionContext
 from core.schema.forensics import ThreatAttributionReport
 
+_MAX_SOURCE_CHARS = 2500
+_MAX_README_CHARS = 2000
+_MAX_AST_TOKENS = 12
+_MAX_DEPENDENCIES = 30
+
+
+def _compact_text(value: str, limit: int) -> str:
+    """Keep prompt inputs bounded while preserving their beginning."""
+    value = value.strip()
+    return value if len(value) <= limit else value[:limit] + "\n[truncated]"
+
 AIR_GAPPED_SYSTEM_PROMPT = """You are an air-gapped security analyzer reviewing an open-source package installation script.
 Analyze the package metadata, dependencies, and lifecycle code.
 Synthesize a strict Expected Behavioral Contract (EBC) in JSON format.
@@ -29,15 +40,17 @@ Identify the attack technique, map to MITRE ATT&CK tactics, and provide actionab
 def format_intent_synthesis_prompt(context: ExtractionContext) -> str:
     """Format prompt for IntentSynthesizerAgent to hypothesize legitimate contract boundaries."""
     schema_json = json.dumps(ExpectedBehaviorContract.model_json_schema(), indent=2)
-    deps_str = ", ".join(context.dependencies) if context.dependencies else "None"
+    deps_str = ", ".join(context.dependencies[:_MAX_DEPENDENCIES]) if context.dependencies else "None"
 
     return f"""Package Metadata under Evaluation:
 - Name: {context.package_name}
 - Version: {context.version}
 - Ecosystem: {context.ecosystem.value}
-- Declared Description: "{context.declared_description}"
+- Declared Description: "{_compact_text(context.declared_description, 500)}"
 - Repository: {context.repository_url or "Not specified"}
 - Declared Dependencies: {deps_str}
+- README Evidence:
+{_compact_text(context.readme_excerpt, _MAX_README_CHARS) or "Not available"}
 - Lifecycle Hook: {context.hook_type.value}
 - Hook Command: `{context.hook_command}`
 
@@ -64,7 +77,7 @@ def format_red_team_prompt(
     """Format prompt for AdversarialRedTeamAgent to probe for prompt injections and discrepancies."""
     schema_json = json.dumps(ExpectedBehaviorContract.model_json_schema(), indent=2)
     tokens_summary = []
-    for token in context.ast_tokens:
+    for token in context.ast_tokens[:_MAX_AST_TOKENS]:
         entropy_part = f" (entropy: {token.entropy_score:.2f})" if token.entropy_score else ""
         tokens_summary.append(
             f"  - Line {token.line_number} [{token.token_type}] {token.identifier}{entropy_part}: `{token.snippet}`"
@@ -82,7 +95,7 @@ Draft Contract Hypothesized by Intent Synthesizer:
 
 Extracted Script Source Code:
 ```
-{context.source_code}
+    {_compact_text(context.source_code, _MAX_SOURCE_CHARS)}
 ```
 
 Suspicious AST Tokens Detected:
@@ -164,7 +177,7 @@ Kernel Syscall Telemetry:
 
 Target Source Code:
 ```
-{context.source_code}
+    {_compact_text(context.source_code, _MAX_SOURCE_CHARS)}
 ```
 
 Forensic Responder Task:

@@ -10,7 +10,7 @@
 │  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   │
 │                                                                                        │
 │  [+] AUTONOMOUS SEMANTIC-TO-KERNEL DRIFT DETECTOR FOR SUPPLY CHAIN SECURITY            │
-│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN3-CODER:8B    [#] SANDBOX: BWRAP+STRACE │
+│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN3:8B    [#] SANDBOX: BWRAP+STRACE │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -164,8 +164,24 @@ Gatekeeper operates through a five-step automated verification loop:
 | :--- | :--- |
 | **DevSecOps & CI/CD Engineers** | Integrated into pre-install CI steps to scan incoming dependencies and pull requests before `npm install` or `pip install` runs. |
 | **Enterprise Security Operations (SecOps)** | Deploy Gatekeeper as an automated admission scanner in front of private artifact repositories (Nexus, Artifactory, Verdaccio). |
-| **Software Developers** | Run `gatekeeper <pkg_dir>` locally to verify third-party libraries, newly introduced npm packages, or forks prior to local testing. |
+| **Software Developers** | Run `./gk.ps1 <pkg_dir>` locally to verify third-party libraries, newly introduced npm packages, or forks prior to local testing. |
 | **Security Researchers & Registry Maintainers** | Scan npm registry or PyPI firehoses to identify zero-day typosquats and malicious packages targeting developers. |
+
+### Scan an Internet Package Before Installation
+
+Download and inspect an npm package without running its lifecycle scripts or installing it locally:
+
+```powershell
+.\gk-online.ps1 lodash@latest --monitor
+```
+
+The package is downloaded with `npm pack --ignore-scripts`, extracted into a temporary directory, scanned inside Gatekeeper's sandbox, and deleted automatically afterward. Gatekeeper preserves its CI-friendly exit codes: `0` allowed, `1` quarantined, and `2` scan error.
+
+Export an enterprise report without retaining the package locally:
+
+```powershell
+.\gk-online.ps1 express@4.21.2 --format=sarif --output=express.sarif
+```
 
 ---
 
@@ -177,14 +193,14 @@ Gatekeeper operates through a five-step automated verification loop:
 
 ```bash
 # Pull model locally using Ollama
-ollama pull QWEN3-CODER:8B
+ollama pull qwen3:8b
 ```
 
 ---
 
 ## ⚖️ 8. Why This Technology Was Selected
 
-1. **Code & Security Comprehension**: QWEN3-CODER:8B ranks among the top open-weight models for AST interpretation, code reasoning, and schema adherence in the sub-10B parameter category.
+1. **Code & Security Comprehension**: QWEN3:8B provides strong local model performance for AST interpretation, code reasoning, and schema adherence.
 2. **Zero External Latency & No Token Fees**: Running locally via Ollama eliminates third-party cloud API costs, rate-limiting, and network latency.
 3. **Hardware Accessibility**: The 7B model quantized at 4-bit (`q4_k_m`) requires under 5.0 GB of VRAM, running smoothly on modern laptops, consumer GPUs (NVIDIA RTX 3060+), or Apple Silicon, as well as multi-core CPU runners.
 4. **Strict Schema Adherence**: When paired with temperature `0.0` and structured JSON format mode, Ollama reliably returns valid JSON conforming to the Pydantic schema without preamble or markdown artifacts.
@@ -399,7 +415,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
           │
           ▼
 ┌─────────────────────────┐
-│   Intent Analysis       │ ◄─── QWEN3-CODER:8B via Ollama
+│   Intent Analysis       │ ◄─── QWEN3:8B via Ollama
 │   Contract Generation   │
 └─────────────────────────┘
           │
@@ -436,7 +452,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
 | :--- | :--- | :--- | :--- |
 | **Language** | Python | `3.10+` | Core orchestration, parsing, and integration. |
 | **AI Inference** | Ollama | `>= 0.3.0` | Local model serving with low-latency HTTP endpoints and JSON schema support. |
-| **SLM Model** | QWEN3-CODER:8B | `7B-Instruct` | Specialized for code comprehension and structured JSON generation. |
+| **SLM Model** | QWEN3:8B | `8B` | Specialized for code comprehension and structured JSON generation. |
 | **Schema Validation**| Pydantic | `^2.7.0` | Strict data validation and schema generation. |
 | **Kernel Sandbox** | Bubblewrap (`bwrap`)| `>= 0.8.0` | Unprivileged Linux user and mount namespace isolation. |
 | **Syscall Tracing** | `strace` | `>= 5.16` | Filtered system call interception (`openat`, `connect`, `execve`). |
@@ -483,7 +499,7 @@ Install system-level tracing utilities and configure local Python dependencies:
 ```bash
 sudo apt-get update && sudo apt-get install -y strace bubblewrap python3-pip python3-venv
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull QWEN3-CODER:8B
+ollama pull qwen3:8b
 python3 -m venv venv
 source venv/bin/activate
 pip install pydantic httpx rich

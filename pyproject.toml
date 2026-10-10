@@ -20,6 +20,7 @@ test = [
 ]
 
 [project.scripts]
+gk = "core.cli.main:main"
 gatekeeper = "core.cli.main:main"
 sysdrift = "core.cli.main:main"
 

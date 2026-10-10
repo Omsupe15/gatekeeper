@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
@@ -25,6 +28,19 @@ _SYSCALL_CALL_PATTERN = re.compile(
 # Openat argument extractors
 _OPENAT_FLAG_READ = {"O_RDONLY"}
 _OPENAT_FLAG_WRITE = {"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"}
+
+
+@lru_cache(maxsize=1)
+def load_syscall_cache() -> Set[str]:
+    """Load the repository's suspicious syscall cache once per process."""
+    cache_path = Path(__file__).resolve().parents[1] / "config" / "syscall_cache.json"
+    try:
+        with cache_path.open("r", encoding="utf-8") as cache_file:
+            payload = json.load(cache_file)
+        values = payload.get("critical_syscalls", [])
+        return {value.strip() for value in values if isinstance(value, str) and value.strip()}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return set()
 
 
 def _safe_unescape(text: str) -> str:
@@ -304,6 +320,27 @@ def _parse_execve_event(
     }
 
 
+def _parse_generic_event(
+    raw_line: str,
+    pid: Optional[int],
+    syscall_name: str,
+    args_str: str,
+    result_code: int,
+    error_code: Optional[str],
+) -> Dict[str, Any]:
+    """Keep syscall names available for cache-based security checks."""
+    success = result_code >= 0
+    return {
+        "syscall": syscall_name,
+        "pid": pid,
+        "arguments_raw": args_str,
+        "result": result_code,
+        "success": success,
+        "error_code": error_code if not success else None,
+        "raw": raw_line,
+    }
+
+
 def parse_line(line: str) -> Optional[Dict[str, Any]]:
     """Parse a single standalone strace line.
     
@@ -347,7 +384,7 @@ def parse_line(line: str) -> Optional[Dict[str, Any]]:
     elif syscall_name in ("execve", "execveat"):
         return _parse_execve_event(raw_line, pid, args_str, result_code, error_code, syscall_name=syscall_name)
 
-    return None
+    return _parse_generic_event(raw_line, pid, syscall_name, args_str, result_code, error_code)
 
 
 def parse_trace(trace_text: str) -> List[Dict[str, Any]]:
@@ -420,6 +457,8 @@ def parse_trace(trace_text: str) -> List[Dict[str, Any]]:
                         events.append(_parse_connect_event(raw_line, pid, args_str, result_code, error_code))
                     elif sys_name in ("execve", "execveat"):
                         events.append(_parse_execve_event(raw_line, pid, args_str, result_code, error_code, syscall_name=sys_name))
+                    else:
+                        events.append(_parse_generic_event(raw_line, pid, sys_name, args_str, result_code, error_code))
                 continue
 
             # Case 3: Complete single line
@@ -464,6 +503,17 @@ def parse_trace(trace_text: str) -> List[Dict[str, Any]]:
                         -1,
                         "UNFINISHED",
                         syscall_name=unf_sys,
+                    )
+                )
+            else:
+                events.append(
+                    _parse_generic_event(
+                        f"{unf_sys}({partial_args} <unfinished ...>",
+                        unf_pid,
+                        unf_sys,
+                        partial_args,
+                        -1,
+                        "UNFINISHED",
                     )
                 )
         except Exception:
@@ -514,7 +564,14 @@ def validate_observed_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Telemetry payload must be a dictionary.")
 
     normalized: Dict[str, Any] = {}
-    for field_name in ("files_read", "files_written", "network_endpoints", "spawned_binaries"):
+    for field_name in (
+        "files_read",
+        "files_written",
+        "network_endpoints",
+        "spawned_binaries",
+        "syscalls",
+        "flagged_syscalls",
+    ):
         normalized[field_name] = _normalize_string_set(payload.get(field_name, set()), field_name)
 
     timed_out = payload.get("timed_out", False)
@@ -546,16 +603,24 @@ def extract_observed_trace(
       - files_written: set of file paths opened with write access
       - network_endpoints: set of attempted network endpoints ("ip:port" or address)
       - spawned_binaries: set of executable basenames
-      - timed_out: boolean timeout flag
+            - syscalls: all syscall names observed in the log
+            - flagged_syscalls: observed names present in the suspicious syscall cache
+            - timed_out: boolean timeout flag
       - execution_duration_ms: execution runtime duration in milliseconds
     """
     files_read: Set[str] = set()
     files_written: Set[str] = set()
     network_endpoints: Set[str] = set()
     spawned_binaries: Set[str] = set()
-
+    syscalls: Set[str] = set()
+    flagged_syscalls: Set[str] = set()
+    syscall_cache = load_syscall_cache()
     for ev in events:
         syscall = ev.get("syscall")
+        if syscall:
+            syscalls.add(syscall)
+            if syscall in syscall_cache:
+                flagged_syscalls.add(syscall)
         if syscall == "openat":
             path = ev.get("path")
             access_mode = ev.get("access_mode")
@@ -586,6 +651,8 @@ def extract_observed_trace(
         "files_written": files_written,
         "network_endpoints": network_endpoints,
         "spawned_binaries": spawned_binaries,
+        "syscalls": syscalls,
+        "flagged_syscalls": flagged_syscalls,
         "timed_out": timed_out,
         "execution_duration_ms": execution_duration_ms,
     }

@@ -61,7 +61,14 @@ class SandboxReport:
         # Ensure sets in telemetry are converted to sorted lists for serialization
         if "telemetry" in data and isinstance(data["telemetry"], dict):
             tel = data["telemetry"]
-            for key in ("files_read", "files_written", "network_endpoints", "spawned_binaries"):
+            for key in (
+                "files_read",
+                "files_written",
+                "network_endpoints",
+                "spawned_binaries",
+                "syscalls",
+                "flagged_syscalls",
+            ):
                 if key in tel and isinstance(tel[key], (set, list)):
                     tel[key] = sorted(list(tel[key]))
         return data
@@ -132,7 +139,6 @@ class SyscallTracer:
         """Run the script in the sandbox under strace and return a structured report."""
         effective_timeout = timeout if timeout is not None else self.timeout_seconds
         start_time = time.perf_counter()
-
         chosen_backend = self.get_active_backend(backend_override)
 
         # Step 1: Verify backend availability

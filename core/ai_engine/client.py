@@ -48,6 +48,10 @@ class OllamaClient:
             or os.getenv("GATEKEEPER_MODEL")
             or self.DEFAULT_MODEL
         )
+        self._model_resolved = self.model != self.DEFAULT_MODEL
+        self._health_status: Optional[bool] = None
+        self._async_http_client: Optional[httpx.AsyncClient] = None
+        self._sync_http_client: Optional[httpx.Client] = None
         self.timeout = (
             timeout
             if timeout is not None
@@ -56,34 +60,39 @@ class OllamaClient:
 
     async def check_health(self) -> bool:
         """Check if the local Ollama daemon is reachable and responding."""
+        if self._health_status is not None:
+            return self._health_status
         url = f"{self.base_url}/api/tags"
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                response = await client.get(url)
-                return response.status_code == 200
+            response = await self._get_async_client().get(url, timeout=3.0)
+            self._health_status = response.status_code == 200
+            return self._health_status
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+            self._health_status = False
             return False
 
     def check_health_sync(self) -> bool:
         """Synchronously check if the local Ollama daemon is reachable."""
+        if self._health_status is not None:
+            return self._health_status
         url = f"{self.base_url}/api/tags"
         try:
-            with httpx.Client(timeout=3.0) as client:
-                response = client.get(url)
-                return response.status_code == 200
+            response = self._get_sync_client().get(url, timeout=3.0)
+            self._health_status = response.status_code == 200
+            return self._health_status
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+            self._health_status = False
             return False
 
     async def get_available_models(self) -> List[str]:
         """Fetch list of all models currently pulled into the local Ollama daemon."""
         url = f"{self.base_url}/api/tags"
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    return [m.get("name", "") for m in models if m.get("name")]
-                return []
+            response = await self._get_async_client().get(url, timeout=5.0)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                return [m.get("name", "") for m in models if m.get("name")]
+            return []
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
             return []
 
@@ -91,12 +100,11 @@ class OllamaClient:
         """Synchronously fetch list of all models currently pulled into the local Ollama daemon."""
         url = f"{self.base_url}/api/tags"
         try:
-            with httpx.Client(timeout=5.0) as client:
-                response = client.get(url)
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    return [m.get("name", "") for m in models if m.get("name")]
-                return []
+            response = self._get_sync_client().get(url, timeout=5.0)
+            if response.status_code == 200:
+                models = response.json().get("models", [])
+                return [m.get("name", "") for m in models if m.get("name")]
+            return []
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
             return []
 
@@ -104,10 +112,12 @@ class OllamaClient:
         """Resolve the best available model, falling back to installed variants if needed."""
         available = await self.get_available_models()
         if not available:
+            self._model_resolved = True
             return self.model
 
         # Exact match
         if self.model in available:
+            self._model_resolved = True
             return self.model
 
         # Base prefix match (e.g., qwen2.5-coder:7b vs qwen2.5-coder:3b-instruct-q8_0)
@@ -115,28 +125,34 @@ class OllamaClient:
         matching = [m for m in available if m.startswith(prefix)]
         if matching:
             self.model = matching[0]
+            self._model_resolved = True
             return matching[0]
 
         # First available model as fallback
         self.model = available[0]
+        self._model_resolved = True
         return available[0]
 
     def resolve_active_model_sync(self) -> str:
         """Synchronously resolve best available model."""
         available = self.get_available_models_sync()
         if not available:
+            self._model_resolved = True
             return self.model
 
         if self.model in available:
+            self._model_resolved = True
             return self.model
 
         prefix = self.model.split(":")[0]
         matching = [m for m in available if m.startswith(prefix)]
         if matching:
             self.model = matching[0]
+            self._model_resolved = True
             return matching[0]
 
         self.model = available[0]
+        self._model_resolved = True
         return available[0]
 
     async def chat(
@@ -147,7 +163,7 @@ class OllamaClient:
         timeout: Optional[float] = None,
     ) -> str:
         """Execute a structured chat completion against Ollama with zero temperature."""
-        if self.model == self.DEFAULT_MODEL:
+        if not self._model_resolved:
             await self.resolve_active_model()
 
         url = f"{self.base_url}/api/chat"
@@ -167,16 +183,17 @@ class OllamaClient:
 
         req_timeout = timeout or self.timeout
         try:
-            async with httpx.AsyncClient(timeout=req_timeout) as client:
-                response = await client.post(url, json=payload)
-                if response.status_code != 200:
-                    raise OllamaError(
-                        f"Ollama API returned HTTP {response.status_code}: {response.text}"
-                    )
-                data = response.json()
-                message = data.get("message", {})
-                content = message.get("content", "")
-                return content
+            response = await self._get_async_client().post(
+                url, json=payload, timeout=req_timeout
+            )
+            if response.status_code != 200:
+                raise OllamaError(
+                    f"Ollama API returned HTTP {response.status_code}: {response.text}"
+                )
+            data = response.json()
+            message = data.get("message", {})
+            content = message.get("content", "")
+            return content
         except httpx.ConnectError as e:
             raise OllamaConnectionError(
                 f"Failed to connect to Ollama daemon at {self.base_url}: {e}"
@@ -196,7 +213,7 @@ class OllamaClient:
         timeout: Optional[float] = None,
     ) -> str:
         """Synchronous wrapper for chat completion."""
-        if self.model == self.DEFAULT_MODEL:
+        if not self._model_resolved:
             self.resolve_active_model_sync()
 
         url = f"{self.base_url}/api/chat"
@@ -216,14 +233,15 @@ class OllamaClient:
 
         req_timeout = timeout or self.timeout
         try:
-            with httpx.Client(timeout=req_timeout) as client:
-                response = client.post(url, json=payload)
-                if response.status_code != 200:
-                    raise OllamaError(
-                        f"Ollama API returned HTTP {response.status_code}: {response.text}"
-                    )
-                data = response.json()
-                return data.get("message", {}).get("content", "")
+            response = self._get_sync_client().post(
+                url, json=payload, timeout=req_timeout
+            )
+            if response.status_code != 200:
+                raise OllamaError(
+                    f"Ollama API returned HTTP {response.status_code}: {response.text}"
+                )
+            data = response.json()
+            return data.get("message", {}).get("content", "")
         except httpx.ConnectError as e:
             raise OllamaConnectionError(
                 f"Failed to connect to Ollama daemon at {self.base_url}: {e}"
@@ -263,13 +281,14 @@ class OllamaClient:
 
         req_timeout = timeout or self.timeout
         try:
-            async with httpx.AsyncClient(timeout=req_timeout) as client:
-                response = await client.post(url, json=payload)
-                if response.status_code != 200:
-                    raise OllamaError(
-                        f"Ollama API returned HTTP {response.status_code}: {response.text}"
-                    )
-                return response.json().get("response", "")
+            response = await self._get_async_client().post(
+                url, json=payload, timeout=req_timeout
+            )
+            if response.status_code != 200:
+                raise OllamaError(
+                    f"Ollama API returned HTTP {response.status_code}: {response.text}"
+                )
+            return response.json().get("response", "")
         except httpx.ConnectError as e:
             raise OllamaConnectionError(
                 f"Failed to connect to Ollama daemon at {self.base_url}: {e}"
@@ -280,3 +299,13 @@ class OllamaClient:
             ) from e
         except httpx.RequestError as e:
             raise OllamaError(f"HTTP request to Ollama failed: {e}") from e
+
+    def _get_sync_client(self) -> httpx.Client:
+        if self._sync_http_client is None:
+            self._sync_http_client = httpx.Client()
+        return self._sync_http_client
+
+    def _get_async_client(self) -> httpx.AsyncClient:
+        if self._async_http_client is None:
+            self._async_http_client = httpx.AsyncClient()
+        return self._async_http_client

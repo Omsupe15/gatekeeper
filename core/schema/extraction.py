@@ -60,6 +60,10 @@ class ExtractionContext(BaseModel):
         default="",
         description="Natural language description from manifest",
     )
+    readme_excerpt: str = Field(
+        default="",
+        description="Relevant, bounded excerpt from the package README",
+    )
     repository_url: Optional[str] = None
     dependencies: List[str] = Field(default_factory=list)
     hook_type: LifecycleHookType

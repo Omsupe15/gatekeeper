@@ -313,6 +313,24 @@ def test_process_drift_unauthorized_binaries_scaling():
     assert all(v.severity == SeverityLevel.CRITICAL.value for v in violations_2)
 
 
+def test_cached_suspicious_syscall_forces_quarantine():
+    """Verify a syscall found in the suspicious cache becomes a critical violation."""
+    contract = ExpectedBehaviorContract(
+        package_name="evasive-pkg",
+        purpose="Offline utility",
+        network_required=False,
+    )
+    trace = ObservedKernelTrace(flagged_syscalls={"ptrace"})
+
+    result = DriftArbitrator().arbitrate(contract, trace)
+
+    assert result.is_quarantined is True
+    assert result.process_drift == 1.0
+    assert len(result.violations) == 1
+    assert result.violations[0].offending_artifact == "ptrace"
+
+
+
 # =====================================================================
 # 5. Composite DriftArbitrator & Scenario Tests
 # =====================================================================

@@ -26,6 +26,51 @@ from core.schema.extraction import (
     LifecycleHookType,
 )
 
+_README_FILENAMES = ("README.md", "README.rst", "README.txt", "README")
+_README_MAX_CHARS = 3000
+_README_RELEVANCE_TERMS = (
+    "install",
+    "build",
+    "network",
+    "offline",
+    "credential",
+    "secret",
+    "socket",
+    "download",
+    "postinstall",
+    "preinstall",
+    "permission",
+    "privacy",
+)
+
+
+def _load_readme_excerpt(package_path: Path) -> str:
+    """Read only relevant README lines and cap their size before LLM prompting."""
+    readme_path = next(
+        (package_path / name for name in _README_FILENAMES if (package_path / name).is_file()),
+        None,
+    )
+    if readme_path is None:
+        return ""
+
+    try:
+        text = readme_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    lines = text.splitlines()
+    relevant = [
+        line.strip()
+        for line in lines
+        if line.strip()
+        and (
+            line.lstrip().startswith("#")
+            or any(term in line.lower() for term in _README_RELEVANCE_TERMS)
+        )
+    ]
+    excerpt = "\n".join(relevant)
+    return excerpt[:_README_MAX_CHARS]
+
 
 def has_lifecycle_hooks(package_dir: str | Path) -> bool:
     """Checks whether a package contains executable lifecycle installation hooks.
@@ -81,6 +126,7 @@ def extract_context(
         version=manifest.version,
         ecosystem=manifest.ecosystem,
         declared_description=manifest.declared_description,
+        readme_excerpt=_load_readme_excerpt(pkg_path),
         repository_url=manifest.repository_url,
         dependencies=manifest.dependencies,
         hook_type=hook_type,

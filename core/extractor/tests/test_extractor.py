@@ -216,6 +216,33 @@ def test_extract_context_end_to_end(tmp_path: Path) -> None:
     RunnerBuilder.cleanup_runner_script(ctx.runner_script_path)
 
 
+def test_extract_context_compacts_relevant_readme(tmp_path: Path) -> None:
+    """Verifies README context is relevant and bounded before prompting the model."""
+    pkg_dir = tmp_path / "readme-pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "package.json").write_text(
+        json.dumps({
+            "name": "readme-pkg",
+            "scripts": {"postinstall": "echo build"},
+        }),
+        encoding="utf-8",
+    )
+    (pkg_dir / "README.md").write_text(
+        "# Offline Utility\n\n"
+        "This package performs a local build without network access.\n"
+        "irrelevant filler " + ("x" * 6000),
+        encoding="utf-8",
+    )
+
+    ctx = extract_context(pkg_dir)
+
+    assert ctx is not None
+    assert "without network access" in ctx.readme_excerpt
+    assert "irrelevant filler" not in ctx.readme_excerpt
+    assert len(ctx.readme_excerpt) <= 3000
+    RunnerBuilder.cleanup_runner_script(ctx.runner_script_path)
+
+
 def test_nonexistent_directory_raises_error() -> None:
     """Verifies FileNotFoundError on missing package directory."""
     with pytest.raises(FileNotFoundError):

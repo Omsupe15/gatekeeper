@@ -39,6 +39,8 @@ def generate_json_report(
             "files_written": sorted(list(trace.files_written)),
             "network_endpoints": sorted(list(trace.network_endpoints)),
             "spawned_binaries": sorted(list(trace.spawned_binaries)),
+            "syscalls": sorted(list(trace.syscalls)),
+            "flagged_syscalls": sorted(list(trace.flagged_syscalls)),
             "timed_out": trace.timed_out,
             "execution_duration_ms": trace.execution_duration_ms,
         },

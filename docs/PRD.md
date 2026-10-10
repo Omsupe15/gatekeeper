@@ -11,7 +11,7 @@
 Software package managers (`npm`, `pip`, `cargo`, `gem`) grant arbitrary, unmonitored code execution privileges to installation lifecycle scripts (`postinstall`, `setup.py`, `build.rs`). Adversaries leverage this blind spot to deploy evasive malware—harvesting developer credentials (`~/.ssh`, `~/.aws`, `.env`), establishing reverse shells, or delivering secondary payloads.
 
 Gatekeeper solves this problem through a **neuro-symbolic, AI-centric architecture**:
-1. An open-weight Small Language Model (**Qwen3-Coder:8B** running locally via **Ollama**) performs deep cognitive semantic analysis of package metadata, code comments, dependencies, and script ASTs.
+1. An open-weight Small Language Model (**Qwen3:8B** running locally via **Ollama**) performs deep cognitive semantic analysis of package metadata, code comments, dependencies, and script ASTs.
 2. The AI generates a machine-enforceable **Expected Behavioral Contract (EBC)** defining strict operational boundaries for network, filesystem, and subprocess execution.
 3. Untrusted code is executed inside an unprivileged Linux kernel namespace sandbox (**Bubblewrap**), with low-level syscalls captured deterministically via `strace`.
 4. A differential arbitration engine computes the mathematical divergence between the AI's synthesized contract and the kernel telemetry.
