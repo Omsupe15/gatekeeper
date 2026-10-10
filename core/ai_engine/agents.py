@@ -184,22 +184,20 @@ class ContractSynthesizer:
 
         except OllamaError as err:
             logger.error(
-                "Ollama inference error during contract synthesis: %s. Applying zero-trust fallback.",
+                "Ollama inference error during contract synthesis: %s.",
                 err,
             )
-            return ExpectedBehaviorContract.zero_trust_fallback(
-                package_name=context.package_name,
-                purpose=f"Inference failure - zero trust fallback applied for {context.package_name}",
-            )
+            raise RuntimeError(
+                f"Ollama inference failed while synthesizing the behavior contract: {err}"
+            ) from err
         except Exception as err:
             logger.exception(
-                "Unexpected failure in ContractSynthesizer: %s. Applying zero-trust fallback.",
+                "Unexpected failure in ContractSynthesizer: %s.",
                 err,
             )
-            return ExpectedBehaviorContract.zero_trust_fallback(
-                package_name=context.package_name,
-                purpose=f"System error - zero trust fallback applied for {context.package_name}",
-            )
+            raise RuntimeError(
+                f"Contract synthesis failed unexpectedly: {err}"
+            ) from err
 
     def synthesize_sync(
         self, context: ExtractionContext
@@ -221,13 +219,12 @@ class ContractSynthesizer:
             return self._validate_with_reflection_sync(audited_json, context)
         except Exception as err:
             logger.warning(
-                "Contract synthesis sync error: %s. Applying zero-trust fallback.",
+                "Contract synthesis sync error: %s.",
                 err,
             )
-            return ExpectedBehaviorContract.zero_trust_fallback(
-                package_name=context.package_name,
-                purpose=f"Fallback applied for {context.package_name}",
-            )
+            raise RuntimeError(
+                f"Contract synthesis failed unexpectedly: {err}"
+            ) from err
 
     async def _validate_with_reflection(
         self, raw_json: str, context: ExtractionContext

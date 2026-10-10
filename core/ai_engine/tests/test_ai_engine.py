@@ -78,7 +78,7 @@ def test_ollama_client_init_defaults():
     """Verify OllamaClient initialization default parameters."""
     client = OllamaClient()
     assert client.base_url == "http://localhost:11434"
-    assert client.model == "qwen2.5-coder:7b"
+    assert client.model == "qwen3:8b"
     assert client.timeout == 30.0
 
 
@@ -104,12 +104,12 @@ async def test_ollama_client_check_health_connection_error():
 @pytest.mark.asyncio
 async def test_ollama_client_resolve_active_model():
     """Verify dynamic model resolution against available local tags."""
-    client = OllamaClient(model="qwen2.5-coder:7b")
+    client = OllamaClient(model="qwen3:8b")
     with patch.object(
-        client, "get_available_models", return_value=["qwen2.5-coder:3b-instruct-q8_0", "llama3"]
+        client, "get_available_models", return_value=["qwen3:8b-instruct-q4_0", "llama3"]
     ):
         resolved = await client.resolve_active_model()
-        assert resolved == "qwen2.5-coder:3b-instruct-q8_0"
+        assert resolved == "qwen3:8b-instruct-q4_0"
 
 
 @pytest.mark.asyncio

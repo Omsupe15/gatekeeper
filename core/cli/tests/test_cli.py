@@ -181,6 +181,27 @@ def test_cli_no_lifecycle_hook_fast_path(tmp_path):
     assert exit_code == 0
 
 
+def test_cli_monitor_mode_reports_live_pipeline_steps(tmp_path, capsys):
+    """Verifies the CLI exposes a monitor mode with the active Ollama model and live execution steps."""
+    pkg_dir = tmp_path / "clean-monitor-package"
+    pkg_dir.mkdir()
+    (pkg_dir / "package.json").write_text(
+        json.dumps({
+            "name": "clean-monitor-package",
+            "version": "1.0.0",
+            "scripts": {
+                "test": "pytest",
+            },
+        })
+    )
+
+    exit_code = run_cli([str(pkg_dir), "--format=terminal", "--monitor"])
+    captured = capsys.readouterr().out
+    assert exit_code == 0
+    assert "qwen3:8b" in captured
+    assert "Live monitoring enabled" in captured
+
+
 def test_cli_pipeline_coordinator_adapter(tmp_path):
     """Verifies that PipelineCoordinator allows dependency injection without merge conflicts."""
     pkg_dir = tmp_path / "custom-pkg"

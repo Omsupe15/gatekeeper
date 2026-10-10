@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from core.ai_engine.agents import ContractSynthesizer
 from core.ai_engine.client import OllamaClient
@@ -55,6 +55,7 @@ class PipelineCoordinator:
         arbitrator: Optional[DriftArbitrator] = None,
         forensic_agent: Optional[ForensicAgent] = None,
         require_live_services: bool = True,
+        status_callback: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self.extractor_fn = extractor_fn
         self.has_hooks_fn = has_hooks_fn
@@ -64,6 +65,12 @@ class PipelineCoordinator:
         self.arbitrator = arbitrator
         self.forensic_agent = forensic_agent
         self.require_live_services = require_live_services
+        self.status_callback = status_callback
+
+    def _emit_status(self, stage: str, detail: str) -> None:
+        """Emit a stage update to any registered live-monitor callback."""
+        if self.status_callback is not None:
+            self.status_callback(stage, detail)
 
     def analyze(
         self,
@@ -75,6 +82,7 @@ class PipelineCoordinator:
         package_name = os.path.basename(package_path) or "target-package"
 
         # Step 1: Check for install-time lifecycle hooks (Block 3)
+        self._emit_status("hook_check", "Scanning package for install-time lifecycle hooks...")
         try:
             has_hooks = self.has_hooks_fn(package_path)
         except Exception:
@@ -83,6 +91,7 @@ class PipelineCoordinator:
         # Fast-Path: Package has no install-time lifecycle hooks
         # Build-time execution is not required; immediate ALLOW verdict (< 50ms)
         if not has_hooks:
+            self._emit_status("hook_check", "No lifecycle hooks detected; taking the clean-package fast path.")
             contract = ExpectedBehaviorContract(
                 package_name=package_name,
                 purpose="Package contains no install-time lifecycle hooks (Nominal / Clean)",
@@ -113,8 +122,10 @@ class PipelineCoordinator:
             return contract, trace, drift_result, None
 
         # Step 2: Extraction of context and runner script
+        self._emit_status("extract", "Extracting package metadata, hooks, and runner script...")
         extraction_ctx = self.extractor_fn(package_path)
         if extraction_ctx is None:
+            self._emit_status("extract", "Extraction returned no runnable hook context; treating as clean.")
             contract = ExpectedBehaviorContract(
                 package_name=package_name,
                 purpose="Package contains no install-time lifecycle hooks (Nominal / Clean)",
@@ -146,6 +157,7 @@ class PipelineCoordinator:
 
         # Step 3: Validate live daemon requirements if strictly required
         client = self.ollama_client or OllamaClient()
+        self._emit_status("services", "Validating local Ollama and sandbox runtime availability...")
         if self.require_live_services and self.synthesizer is None:
             if not client.check_health_sync():
                 raise RuntimeError(
@@ -161,10 +173,12 @@ class PipelineCoordinator:
                 )
 
         # Step 4: AI Expected Behavior Contract Synthesis (Block 2)
+        self._emit_status("contract", "Synthesizing expected behavior contract from package context...")
         synthesizer = self.synthesizer or ContractSynthesizer(client=client)
         contract = synthesizer.synthesize_sync(extraction_ctx)
 
         # Step 5: Sandboxed Kernel Execution & Syscall Interception (Block 4)
+        self._emit_status("sandbox", "Executing lifecycle script in the sandbox and tracing syscalls...")
         tracer = self.tracer or SyscallTracer()
         runner_path = str(extraction_ctx.runner_script_path) if extraction_ctx.runner_script_path else None
         if not runner_path or not os.path.exists(runner_path):
@@ -181,19 +195,25 @@ class PipelineCoordinator:
             )
 
         if not report.trace_complete and report.status == "execution_failed" and not report.raw_trace_file:
-            raise RuntimeError(
-                f"Kernel syscall tracing failed inside sandbox: {report.stderr or report.errors}"
-            )
+            error_lines = [
+                "Kernel syscall tracing failed inside sandbox.",
+                report.stderr.strip() if getattr(report, "stderr", "") else "",
+                *[msg.strip() for msg in getattr(report, "errors", []) if str(msg).strip()],
+            ]
+            error_text = "\n".join(line for line in error_lines if line)
+            raise RuntimeError(error_text)
 
         trace = report.to_observed_kernel_trace_model()
 
         # Step 6: Differential Vector Arbitration (Block 5)
+        self._emit_status("arbitration", "Comparing declared behavior against observed kernel events...")
         arbitrator = self.arbitrator or DriftArbitrator(threshold=threshold)
         drift_result = arbitrator.arbitrate(contract, trace)
 
         # Step 7: Post-Trace AI Forensic Threat Attribution (Block 2)
         forensic_report = None
         if drift_result.is_quarantined:
+            self._emit_status("forensics", "Generating forensic attribution for the detected drift...")
             forensic_agent = self.forensic_agent or ForensicAgent(client=client)
             forensic_report = forensic_agent.analyze_incident_sync(
                 ebc=contract,
@@ -267,6 +287,11 @@ def run_cli(
         help="Enable verbose output",
     )
     parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Display live stage-by-stage pipeline monitoring output",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="Disable Rich ANSI color formatting",
@@ -297,12 +322,25 @@ def run_cli(
         return 2
 
     # Execute Analysis
+    analysis_coordinator = coordinator
+    if parsed.monitor:
+        def progress_callback(stage: str, detail: str) -> None:
+            c.print(f"[bold cyan][{stage}][/bold cyan] {detail}")
+
+        if analysis_coordinator is None:
+            analysis_coordinator = PipelineCoordinator(status_callback=progress_callback)
+        elif hasattr(analysis_coordinator, "status_callback"):
+            analysis_coordinator.status_callback = progress_callback
+
     try:
         if parsed.format == "terminal":
             print_banner(c)
+            if parsed.monitor:
+                c.print("[bold #00F0FF]Live monitoring enabled[/bold #00F0FF]")
+                c.print(f"[bold #00F0FF]Using Ollama model: {OllamaClient().model}[/bold #00F0FF]")
             with create_status_spinner("Analyzing package & executing kernel sandbox trace...", c):
                 contract, trace, drift_result, forensic_report = analyze_target_package(
-                    package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
+                    package_dir, threshold=parsed.threshold, c=c, coordinator=analysis_coordinator
                 )
 
             render_comparison_matrix(contract, trace, c)
@@ -317,8 +355,10 @@ def run_cli(
                 return 0
 
         elif parsed.format == "json":
+            if parsed.monitor:
+                c.print("[bold #00F0FF]Monitoring enabled: live pipeline stages are active[/bold #00F0FF]")
             contract, trace, drift_result, forensic_report = analyze_target_package(
-                package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
+                package_dir, threshold=parsed.threshold, c=c, coordinator=analysis_coordinator
             )
             report_str = generate_json_report(package_dir, contract, trace, drift_result, forensic_report)
             if parsed.output:
@@ -331,8 +371,10 @@ def run_cli(
             return 1 if drift_result.is_quarantined else 0
 
         elif parsed.format == "sarif":
+            if parsed.monitor:
+                c.print("[bold #00F0FF]Monitoring enabled: live pipeline stages are active[/bold #00F0FF]")
             contract, trace, drift_result, forensic_report = analyze_target_package(
-                package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
+                package_dir, threshold=parsed.threshold, c=c, coordinator=analysis_coordinator
             )
             report_str = generate_sarif_report(package_dir, drift_result, forensic_report)
             if parsed.output:

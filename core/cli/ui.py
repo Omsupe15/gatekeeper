@@ -64,7 +64,7 @@ def print_banner(c: Optional[Console] = None) -> None:
 │  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   │
 │                                                                                        │
 │  [+] AUTONOMOUS SEMANTIC-TO-KERNEL DRIFT DETECTOR FOR SUPPLY CHAIN SECURITY            │
-│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN2.5-CODER:7B    [#] SANDBOX: BWRAP+STRACE │
+│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN3:8B    [#] SANDBOX: BWRAP+STRACE │
 └────────────────────────────────────────────────────────────────────────────────────────┘[/bold #00F0FF]"""
     c.print(banner_text)
 
