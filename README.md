@@ -10,7 +10,7 @@
 │  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   │
 │                                                                                        │
 │  [+] AUTONOMOUS SEMANTIC-TO-KERNEL DRIFT DETECTOR FOR SUPPLY CHAIN SECURITY            │
-│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN2.5-CODER:7B    [#] SANDBOX: BWRAP+STRACE │
+│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN3-CODER:8B    [#] SANDBOX: BWRAP+STRACE │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -177,14 +177,14 @@ Gatekeeper operates through a five-step automated verification loop:
 
 ```bash
 # Pull model locally using Ollama
-ollama pull qwen2.5-coder:7b
+ollama pull QWEN3-CODER:8B
 ```
 
 ---
 
 ## ⚖️ 8. Why This Technology Was Selected
 
-1. **Code & Security Comprehension**: Qwen2.5-Coder:7B ranks among the top open-weight models for AST interpretation, code reasoning, and schema adherence in the sub-10B parameter category.
+1. **Code & Security Comprehension**: QWEN3-CODER:8B ranks among the top open-weight models for AST interpretation, code reasoning, and schema adherence in the sub-10B parameter category.
 2. **Zero External Latency & No Token Fees**: Running locally via Ollama eliminates third-party cloud API costs, rate-limiting, and network latency.
 3. **Hardware Accessibility**: The 7B model quantized at 4-bit (`q4_k_m`) requires under 5.0 GB of VRAM, running smoothly on modern laptops, consumer GPUs (NVIDIA RTX 3060+), or Apple Silicon, as well as multi-core CPU runners.
 4. **Strict Schema Adherence**: When paired with temperature `0.0` and structured JSON format mode, Ollama reliably returns valid JSON conforming to the Pydantic schema without preamble or markdown artifacts.
@@ -399,7 +399,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
           │
           ▼
 ┌─────────────────────────┐
-│   Intent Analysis       │ ◄─── Qwen2.5-Coder:7B via Ollama
+│   Intent Analysis       │ ◄─── QWEN3-CODER:8B via Ollama
 │   Contract Generation   │
 └─────────────────────────┘
           │
@@ -436,7 +436,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
 | :--- | :--- | :--- | :--- |
 | **Language** | Python | `3.10+` | Core orchestration, parsing, and integration. |
 | **AI Inference** | Ollama | `>= 0.3.0` | Local model serving with low-latency HTTP endpoints and JSON schema support. |
-| **SLM Model** | Qwen2.5-Coder:7B | `7B-Instruct` | Specialized for code comprehension and structured JSON generation. |
+| **SLM Model** | QWEN3-CODER:8B | `7B-Instruct` | Specialized for code comprehension and structured JSON generation. |
 | **Schema Validation**| Pydantic | `^2.7.0` | Strict data validation and schema generation. |
 | **Kernel Sandbox** | Bubblewrap (`bwrap`)| `>= 0.8.0` | Unprivileged Linux user and mount namespace isolation. |
 | **Syscall Tracing** | `strace` | `>= 5.16` | Filtered system call interception (`openat`, `connect`, `execve`). |
@@ -483,7 +483,7 @@ Install system-level tracing utilities and configure local Python dependencies:
 ```bash
 sudo apt-get update && sudo apt-get install -y strace bubblewrap python3-pip python3-venv
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5-coder:7b
+ollama pull QWEN3-CODER:8B
 python3 -m venv venv
 source venv/bin/activate
 pip install pydantic httpx rich
