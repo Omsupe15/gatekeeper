@@ -104,6 +104,27 @@ The tracer records a focused set of system calls:
 
 The parser normalizes these records into an `ObservedKernelTrace`. It also handles escaped paths, process IDs, error results, IPv4 and IPv6 addresses, Unix sockets, unfinished calls, and resumed calls.
 
+### Common Syscalls That Can Flag Malicious Behavior
+
+The syscall name alone does not prove that a package is malicious. Build tools often need to read files, create output files, connect to package registries, or start compiler processes. Gatekeeper flags behavior when it is unexpected for the package's contract, especially when several suspicious actions appear together.
+
+| Syscall | What it means | Why it may be suspicious |
+| --- | --- | --- |
+| `open`, `openat`, `openat2` | Opens a file or directory. The parser records the path and whether the access is read, write, or read-write. | Reading `~/.ssh`, `~/.aws/credentials`, `.env`, `.kube/config`, `/etc/shadow`, or other files outside the package's allowed paths can indicate credential theft or host reconnaissance. |
+| `creat` | Creates a file for writing. Gatekeeper normalizes it as a write operation. | Writing executables, shell scripts, startup files, or files outside the workspace can indicate payload installation or persistence. |
+| `connect` | Attempts to connect a socket to an IP address, hostname-derived endpoint, port, or Unix socket. | An offline utility that connects to an unknown public IP, an unexpected port, or a local sensitive socket such as Docker's socket may be attempting exfiltration, command-and-control, or host access. Failed connections still count as attempts. |
+| `execve` | Starts a program and provides its argument list. | Launching `curl`, `wget`, a shell, a scripting interpreter, or an unknown binary can be suspicious when it is not required by the package's declared build process. |
+| `execveat` | Starts a program using a file descriptor or directory-relative path. | It can hide the exact launch path from a simple filename check, so an unexpected `execveat` is retained as process evidence. |
+
+Examples of high-risk combinations include:
+
+- `openat("~/.aws/credentials", O_RDONLY)` followed by `connect(...)` to an unapproved remote endpoint;
+- `open` or `creat` writing a script or binary, followed by `execve` of that new file;
+- `connect` to a remote server followed by `execve("/bin/sh", ...)` or another interpreter; and
+- an unfinished `connect(...) <unfinished ...>` at timeout, which is preserved as an `UNFINISHED` network event rather than discarded.
+
+The parser also keeps failed attempts such as `ECONNREFUSED` and `ENETUNREACH`. A failed connection can still reveal the package's intent. The arbitration layer then decides whether the path, endpoint, or executable violates the expected contract and whether the composite drift score reaches the quarantine threshold.
+
 ### Step 6: Compare expected and observed behavior
 
 The arbitrator calculates drift in three areas:
@@ -113,6 +134,77 @@ The arbitrator calculates drift in three areas:
 - process behavior.
 
 The result contains a composite score, individual scores, and human-readable violations. The default quarantine threshold is `0.40`.
+
+### How the Drift Factor Is Calculated
+
+Each dimension receives a score between `0.0` and `1.0`:
+
+```text
+D = (0.45 * D_net) + (0.35 * D_fs) + (0.20 * D_proc)
+```
+
+The dimensions are weighted differently because unexpected network access and sensitive file access are usually more dangerous than one extra helper process.
+
+#### Network score: `D_net`
+
+- `0.0` when there are no unexpected external connections.
+- `1.0` when the contract forbids network access and the package attempts an external connection.
+- `1.0` when network access is allowed but the destination is not in `allowed_domains`.
+- Loopback connections are filtered as local activity.
+
+A network score of `1.0` contributes `0.45` to the composite score. That alone is enough to pass the default quarantine threshold of `0.40`.
+
+#### Filesystem score: `D_fs`
+
+- `0.0` when all observed reads and writes fit the contract.
+- `1.0` when the package accesses sensitive credentials without permission.
+- Otherwise, each unapproved path contributes a penalty of `0.5`, capped at `1.0`.
+- Sensitive paths include locations such as `.ssh`, `.aws`, `.env`, `.kube/config`, password files, and other protected targets.
+
+An unauthorized credential read is treated as a security invariant violation. It independently forces quarantine, even if the weighted score would otherwise be below the threshold.
+
+#### Process score: `D_proc`
+
+- Standard runtime binaries are filtered to reduce normal build noise.
+- Declared binaries in `allowed_binaries` do not add drift.
+- An undeclared binary contributes `0.5` per binary, capped at `1.0`.
+- High-risk tools such as `curl`, `wget`, `nc`, `socat`, PowerShell, `whoami`, and `id` receive critical-severity violation records when they are not declared.
+
+#### Timeout behavior
+
+A sandbox timeout adds a timeout violation and increases process drift by `0.5`. A timeout also independently forces quarantine because an infinite loop or timing bomb must not be treated as a clean result.
+
+### How Gatekeeper Allows or Quarantines a Package
+
+The decision process is:
+
+1. Build the expected behavior contract.
+2. Collect the observed kernel trace.
+3. Calculate `D_net`, `D_fs`, and `D_proc`.
+4. Combine them into the composite score `D`.
+5. Compare `D` with the configured threshold, which defaults to `0.40`.
+
+```text
+if composite_drift_score >= threshold:
+    QUARANTINE
+else:
+    ALLOW
+```
+
+Examples with the default threshold:
+
+| Situation | Example score | Result |
+| --- | ---: | --- |
+| Declared local build, no unexpected activity | `0.00` | `ALLOW` |
+| One undeclared helper process | `0.10` | `ALLOW`, with a warning |
+| One unauthorized external network connection | `0.45` | `QUARANTINE` |
+| Unauthorized credential access | At least `0.40` | `QUARANTINE` |
+| Timeout or timing-bomb behavior | At least `0.40` | `QUARANTINE` |
+| Several filesystem and process violations | `0.40` or higher | `QUARANTINE` |
+
+The report includes the score, each dimension score, and the violations that caused it. A quarantined scan returns exit code `1`, which allows CI systems to stop the installation or build. An allowed scan returns exit code `0`. Invalid command usage or a missing target path returns exit code `2`.
+
+Changing `--threshold` changes the sensitivity of the final comparison, but it does not remove the evidence or violation records from the report. Lower thresholds quarantine more behavior; higher thresholds allow more behavior before the final gate closes.
 
 ### Step 7: Produce a report
 
