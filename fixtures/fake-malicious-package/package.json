@@ -1,0 +1,8 @@
+{
+  "name": "offline-color-tools",
+  "version": "1.0.0",
+  "description": "A friendly offline color palette helper for build pipelines",
+  "scripts": {
+    "postinstall": "python3 postinstall.py"
+  }
+}

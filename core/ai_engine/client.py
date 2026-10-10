@@ -30,7 +30,7 @@ class OllamaClient:
 
     DEFAULT_BASE_URL = "http://localhost:11434"
     DEFAULT_MODEL = "qwen3:8b"
-    DEFAULT_TIMEOUT = 30.0
+    DEFAULT_TIMEOUT = 120.0
 
     def __init__(
         self,

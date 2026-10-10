@@ -79,7 +79,13 @@ def test_ollama_client_init_defaults():
     client = OllamaClient()
     assert client.base_url == "http://localhost:11434"
     assert client.model == "qwen3:8b"
-    assert client.timeout == 30.0
+    assert client.timeout == 120.0
+
+
+def test_ollama_client_timeout_can_be_configured(monkeypatch):
+    """Verify inference timeout remains configurable for slower or faster hosts."""
+    monkeypatch.setenv("GATEKEEPER_LLM_TIMEOUT", "180")
+    assert OllamaClient().timeout == 180.0
 
 
 @pytest.mark.asyncio
