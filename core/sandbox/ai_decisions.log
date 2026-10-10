@@ -1,0 +1,68 @@
+# Gatekeeper Architecture & Engineering Decision Log
+# Module: Block 4 - Kernel Isolation & Syscall Tracing (sandbox/)
+
+[DECISION-SANDBOX-001] Docker Backend Selected Over Native Bubblewrap
+- Context: Bubblewrap (bwrap) relies on Linux unprivileged user namespaces (CLONE_NEWUSER) which are unavailable on macOS and Windows hosts, and often disabled or restricted in enterprise Linux/CI environments.
+- Decision: Use Docker containerization as the primary isolation engine while maintaining Bubblewrap compatibility interfaces.
+- Rationale: Docker provides ubiquitous cross-platform container runtime support with standardized isolation flags (`--network none`, `--read-only`, `--cap-drop ALL`, tmpfs) across Windows, Linux, and CI/CD pipelines.
+
+[DECISION-SANDBOX-002] Backward-Compatible bwrap.py Filename and Class Aliases
+- Context: Existing repository specifications, documentation, and dependent modules reference `sandbox.bwrap.KernelSandbox` or `sandbox.bwrap.run_in_sandbox`.
+- Decision: Retain `sandbox/bwrap.py` and export `DockerSandbox`, `KernelSandbox`, `SandboxRunner`, and `BwrapRunner`.
+- Rationale: Prevents breaking imports across teammate modules while seamlessly routing execution to the hardened Docker isolation layer.
+
+[DECISION-SANDBOX-003] Zero-Trust Filesystem & Network Confinement
+- Context: Untrusted package scripts may attempt to read credentials (`~/.ssh`, `~/.aws`, `.docker`), modify system binaries, or exfiltrate secrets over TCP sockets.
+- Decision: Enforce `--network none`, `--read-only` rootfs, isolated tmpfs (`/tmp`, `/run`), and mount the host workspace as read-only (`:ro`) by default.
+- Rationale: Guarantees air-gapped execution by default. Any writable destination must be an explicitly designated separate directory (`/workspace/output`), and credential files or user home directories are strictly rejected before container launch.
+
+[DECISION-SANDBOX-004] Capability Stripping, No-New-Privileges, and Resource Caps
+- Context: Malicious packages might attempt container escape via kernel vulnerabilities, fork bombs, or memory exhaustion.
+- Decision: Apply `--cap-drop ALL`, `--security-opt no-new-privileges`, `--memory 512m`, `--cpus 1.0`, and `--pids-limit 64`.
+- Rationale: Restricts kernel attack surface and neutralizes fork bombs or denial-of-service attempts within the sandbox. For syscall tracing, only the specific `SYS_PTRACE` capability is selectively enabled; privileged containers (`--privileged`) and broad capability grants (`--cap-add ALL`) are strictly prohibited.
+
+[DECISION-SANDBOX-005] Dedicated Host Trace Log Isolation Outside Untrusted Workspace
+- Context: Untrusted scripts executing inside the container could attempt to tamper with, truncate, or overwrite strace log files if placed in a shared writable workspace.
+- Decision: Mount a dedicated temporary trace directory (`/sysdrift_trace`) outside the workspace and write strace telemetry directly to `/sysdrift_trace/strace.log`.
+- Rationale: Guarantees forensic integrity by preventing the untrusted script from modifying or deleting captured kernel telemetry before analysis.
+
+[DECISION-SANDBOX-006] Deterministic Host-Side Timeout Enforcement & Lifecycle Teardown
+- Context: Adversarial packages may implement timing bombs (long `sleep()` loops) or hang indefinitely waiting for external network sockets.
+- Decision: Enforce strict host-side timeout via Python `subprocess.run(timeout=...)` and issue forceful container termination (`docker rm -f <container_name>`) upon timeout or failure.
+- Rationale: Prevents orphaned processes or hanging CI/CD runners while explicitly tagging timeouts with `timed_out=True` and `status="timeout"` for downstream arbitration.
+
+[DECISION-SANDBOX-007] Fail-Closed Tracing & Explicit Representation of Incomplete Evidence
+- Context: If strace fails to attach, exits prematurely, or produces corrupted logs, downstream modules must not falsely interpret an empty event log as benign behavior.
+- Decision: Explicitly flag `trace_complete=False` and assign `status="trace_failed"` or `status="docker_unavailable"` when trace logs are missing, empty, or unparseable.
+- Rationale: Adheres to fail-closed neuro-symbolic principles. Incomplete evidence creates uncertainty that the arbitrator must account for rather than treating an empty list as proof of harmlessness.
+
+[DECISION-SANDBOX-008] Granular Strace Parsing Without Fragile Monolithic Regular Expressions
+- Context: Strace outputs multi-process PID prefixes, hex/octal escaped characters, multiline strings, error codes (`ENOENT`, `EINPROGRESS`), and split `<unfinished ...>` / `<... resumed>` lines.
+- Decision: Implement multi-stage tokenization with PID state tracking and dedicated parsers for `openat`, `connect`, and `execve`.
+- Rationale: Prevents regex backtracking failures, safely unescapes paths, handles non-blocking connection attempts, and distinguishes read vs write filesystem operations accurately.
+
+[DECISION-SANDBOX-009] Security Boundary Limitations of Docker & Shared Kernel
+- Context: Containers share the host operating system kernel, unlike hypervisor-based Virtual Machines (e.g., Firecracker / QEMU).
+- Decision: Document that Docker provides process and namespace containment rather than hardware virtualization.
+- Rationale: High-risk kernel 0-day exploits could theoretically impact the host kernel. Full production hardening should pair Docker/gVisor or Firecracker microVMs for extreme threat profiles.
+
+[DECISION-SANDBOX-010] Platform-Specific Observations (Windows Host / Docker Desktop)
+- Context: On Windows hosts without an active Docker Desktop Linux daemon, Docker CLI calls fail with pipe errors (`npipe:////./pipe/dockerDesktopLinuxEngine`).
+- Decision: Provide robust fallback detection in `is_docker_available()` that returns `status="docker_unavailable"` without throwing unhandled exceptions, and enable 100% mocked unit test coverage for non-Docker environments.
+- Rationale: Ensures continuous integration and developer testability on any OS regardless of whether Docker daemon is active.
+
+[DECISION-SANDBOX-011] Dual-Backend Architecture (Bubblewrap & Docker)
+- Context: Native Linux workstations and enterprise CI runners support unprivileged Bubblewrap (`bwrap`) without container daemons, while cross-platform environments (Windows, macOS) require Docker.
+- Decision: Implement first-class support for both Bubblewrap (`BubblewrapSandbox`) and Docker (`DockerSandbox`), unified under `KernelSandbox` with auto-backend selection (`backend="auto"`).
+- Rationale: Fully honors original TRD specifications for Bubblewrap unprivileged user namespaces while enabling seamless developer workflow and cross-platform container isolation on Windows/macOS.
+
+[DECISION-SANDBOX-012] Resilient Syscall Ingestion (open, creat, openat2, hex ports)
+- Context: Binaries and shared libraries call varied syscall variants depending on libc version and architecture (e.g., `open`, `creat`, `openat2`, `execveat`, hexadecimal socket ports).
+- Decision: Expand parser grammar to normalize `open`, `creat`, and `openat2` into unified filesystem access modes (`read`, `write`, `read_write`), and support both decimal and hexadecimal sockaddr ports.
+- Rationale: Eliminates blind spots from legacy libc calls or alternative architectures without requiring separate arbitrator schemas.
+
+[DECISION-SANDBOX-013] Forensic Preservation of Unfinished Syscalls on Abrupt Termination
+- Context: Attack scripts employing timing bombs or infinite loops may initiate network connections (`connect(...) <unfinished ...>`) and freeze before completion, causing the container to timeout.
+- Decision: Parse un-resumed syscalls remaining at trace termination and synthesize forensic event records with status `UNFINISHED`.
+- Rationale: Prevents adversaries from evading network telemetry by purposely inducing timeouts or crashes after initiating an outbound socket connection.
+

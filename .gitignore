@@ -1,12 +1,24 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Pytest / coverage
 .pytest_cache/
 .coverage
 htmlcov/
-*.log
-!ai_decisions.log
-.env
-.venv
+
+# Virtual environments
+.venv/
 env/
 venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Operating System files
+.DS_Store
+Thumbs.db
