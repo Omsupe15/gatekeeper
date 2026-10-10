@@ -22,10 +22,13 @@ if sys.platform == "win32":
         pass
 
 
-from core.schema.contract import ExpectedBehaviorContract
-from core.schema.telemetry import ObservedKernelTrace
-from core.schema.arbitrator_models import DriftResult
-from core.schema.forensics import ThreatAttributionReport
+from core.schema import (
+    ExpectedBehaviorContract,
+    ObservedKernelTrace,
+    DriftResult,
+    ThreatAttributionReport,
+)
+
 
 # Color Palette Constants
 COLOR_CYAN = "#00F0FF"      # Cyber Neon Cyan

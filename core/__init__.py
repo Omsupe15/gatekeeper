@@ -1,3 +1,1 @@
-"""
-Gatekeeper Core Package
-"""
+"""Gatekeeper / SysDrift Core Engine Package."""

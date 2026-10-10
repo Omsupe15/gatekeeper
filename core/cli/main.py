@@ -8,14 +8,15 @@ import os
 import argparse
 from typing import List, Optional
 
-from core.schema.contract import ExpectedBehaviorContract
-from core.schema.telemetry import ObservedKernelTrace
-from core.schema.arbitrator_models import (
+from core.schema import (
+    ExpectedBehaviorContract,
+    ObservedKernelTrace,
     DriftResult,
     ViolationRecord,
     SecurityDimension,
+    ThreatAttributionReport,
 )
-from core.schema.forensics import ThreatAttributionReport
+
 from core.cli.ui import (
     get_console,
     print_banner,

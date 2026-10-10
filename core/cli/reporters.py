@@ -5,10 +5,13 @@ Formats scan results into JSON and OASIS SARIF v2.1.0 schemas for CI/CD pipeline
 
 import json
 from typing import Dict, Any, Optional
-from core.schema.contract import ExpectedBehaviorContract
-from core.schema.telemetry import ObservedKernelTrace
-from core.schema.arbitrator_models import DriftResult
-from core.schema.forensics import ThreatAttributionReport
+from core.schema import (
+    ExpectedBehaviorContract,
+    ObservedKernelTrace,
+    DriftResult,
+    ThreatAttributionReport,
+)
+
 
 
 def generate_json_report(
