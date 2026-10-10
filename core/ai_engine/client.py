@@ -36,7 +36,7 @@ class OllamaClient:
         self,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: Optional[float] = None,
     ):
         self.base_url = (
             base_url
@@ -48,7 +48,11 @@ class OllamaClient:
             or os.getenv("GATEKEEPER_MODEL")
             or self.DEFAULT_MODEL
         )
-        self.timeout = timeout
+        self.timeout = (
+            timeout
+            if timeout is not None
+            else float(os.getenv("GATEKEEPER_LLM_TIMEOUT", str(self.DEFAULT_TIMEOUT)))
+        )
 
     async def check_health(self) -> bool:
         """Check if the local Ollama daemon is reachable and responding."""
@@ -83,6 +87,19 @@ class OllamaClient:
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
             return []
 
+    def get_available_models_sync(self) -> List[str]:
+        """Synchronously fetch list of all models currently pulled into the local Ollama daemon."""
+        url = f"{self.base_url}/api/tags"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(url)
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    return [m.get("name", "") for m in models if m.get("name")]
+                return []
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.RequestError):
+            return []
+
     async def resolve_active_model(self) -> str:
         """Resolve the best available model, falling back to installed variants if needed."""
         available = await self.get_available_models()
@@ -97,9 +114,29 @@ class OllamaClient:
         prefix = self.model.split(":")[0]
         matching = [m for m in available if m.startswith(prefix)]
         if matching:
+            self.model = matching[0]
             return matching[0]
 
         # First available model as fallback
+        self.model = available[0]
+        return available[0]
+
+    def resolve_active_model_sync(self) -> str:
+        """Synchronously resolve best available model."""
+        available = self.get_available_models_sync()
+        if not available:
+            return self.model
+
+        if self.model in available:
+            return self.model
+
+        prefix = self.model.split(":")[0]
+        matching = [m for m in available if m.startswith(prefix)]
+        if matching:
+            self.model = matching[0]
+            return matching[0]
+
+        self.model = available[0]
         return available[0]
 
     async def chat(
@@ -110,6 +147,9 @@ class OllamaClient:
         timeout: Optional[float] = None,
     ) -> str:
         """Execute a structured chat completion against Ollama with zero temperature."""
+        if self.model == self.DEFAULT_MODEL:
+            await self.resolve_active_model()
+
         url = f"{self.base_url}/api/chat"
         opt = {
             "temperature": 0.0,
@@ -156,6 +196,9 @@ class OllamaClient:
         timeout: Optional[float] = None,
     ) -> str:
         """Synchronous wrapper for chat completion."""
+        if self.model == self.DEFAULT_MODEL:
+            self.resolve_active_model_sync()
+
         url = f"{self.base_url}/api/chat"
         opt = {
             "temperature": 0.0,

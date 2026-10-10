@@ -9,8 +9,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+from core.ai_engine.agents import ContractSynthesizer
+from core.ai_engine.client import OllamaClient
+from core.ai_engine.forensic_agent import ForensicAgent
+from core.arbitrator.scorer import DriftArbitrator
 from core.cli.reporters import generate_json_report, generate_sarif_report, write_report_to_file
 from core.cli.ui import (
     create_status_spinner,
@@ -23,13 +27,13 @@ from core.cli.ui import (
     render_quarantine_card,
 )
 from core.extractor import extract_context, has_lifecycle_hooks
+from core.sandbox.bwrap import is_bwrap_available, is_docker_available
+from core.sandbox.tracer import SyscallTracer
 from core.schema import (
     DriftResult,
     ExpectedBehaviorContract,
     ObservedKernelTrace,
-    SecurityDimension,
     ThreatAttributionReport,
-    ViolationRecord,
 )
 
 
@@ -37,17 +41,29 @@ class PipelineCoordinator:
     """Decoupled Pipeline Coordinator.
 
     Orchestrates static extraction (Block 3), AI contract synthesis (Block 2),
-    kernel sandboxing (Block 4), and differential arbitration (Block 5).
-    Provides pluggable dependency injection and safe fallbacks to prevent merge conflicts.
+    kernel sandboxing (Block 4), differential arbitration (Block 5),
+    and AI forensic threat attribution (Block 2).
     """
 
     def __init__(
         self,
         extractor_fn=extract_context,
         has_hooks_fn=has_lifecycle_hooks,
+        ollama_client: Optional[OllamaClient] = None,
+        synthesizer: Optional[ContractSynthesizer] = None,
+        tracer: Optional[SyscallTracer] = None,
+        arbitrator: Optional[DriftArbitrator] = None,
+        forensic_agent: Optional[ForensicAgent] = None,
+        require_live_services: bool = True,
     ) -> None:
         self.extractor_fn = extractor_fn
         self.has_hooks_fn = has_hooks_fn
+        self.ollama_client = ollama_client
+        self.synthesizer = synthesizer
+        self.tracer = tracer
+        self.arbitrator = arbitrator
+        self.forensic_agent = forensic_agent
+        self.require_live_services = require_live_services
 
     def analyze(
         self,
@@ -58,22 +74,15 @@ class PipelineCoordinator:
         package_path = os.path.abspath(package_dir)
         package_name = os.path.basename(package_path) or "target-package"
 
-        # Step 1: Static Manifest Extraction & AST Analysis (Block 3)
-        extraction_ctx = None
-        has_hooks = False
+        # Step 1: Check for install-time lifecycle hooks (Block 3)
         try:
             has_hooks = self.has_hooks_fn(package_path)
-            if has_hooks:
-                extraction_ctx = self.extractor_fn(package_path)
         except Exception:
-            # Fallback for bare test fixtures or missing manifests
             has_hooks = False
 
         # Fast-Path: Package has no install-time lifecycle hooks
         # Build-time execution is not required; immediate ALLOW verdict (< 50ms)
-        is_malicious_fixture = "malicious" in package_name.lower() or "evasive" in package_name.lower()
-
-        if not has_hooks and not is_malicious_fixture:
+        if not has_hooks:
             contract = ExpectedBehaviorContract(
                 package_name=package_name,
                 purpose="Package contains no install-time lifecycle hooks (Nominal / Clean)",
@@ -103,112 +112,97 @@ class PipelineCoordinator:
             )
             return contract, trace, drift_result, None
 
-        # Step 2: Evaluation of Fixture or Active Hook
-        # Checks for AST indicators or malicious fixture names
-        has_suspicious_ast = False
-        if extraction_ctx and extraction_ctx.ast_tokens:
-            has_suspicious_ast = any(
-                t.token_type in ("CredentialAccess", "NetworkEgress", "HighEntropyString")
-                or any(k in t.identifier for k in ("socket", "credentials", "194.26.29.112"))
-                for t in extraction_ctx.ast_tokens
-            )
-
-        if is_malicious_fixture or has_suspicious_ast:
-            # Quarantined execution path (Drift >= threshold)
+        # Step 2: Extraction of context and runner script
+        extraction_ctx = self.extractor_fn(package_path)
+        if extraction_ctx is None:
             contract = ExpectedBehaviorContract(
                 package_name=package_name,
-                purpose="Offline canvas / utility helper",
+                purpose="Package contains no install-time lifecycle hooks (Nominal / Clean)",
                 network_required=False,
                 allowed_domains=[],
-                allowed_read_prefixes=["/tmp"],
-                allowed_write_prefixes=["/tmp"],
-                allowed_binaries=["node", "bash"],
+                allowed_read_prefixes=["."],
+                allowed_write_prefixes=[],
+                allowed_binaries=[],
                 accesses_user_credentials=False,
-                risk_level_assessment="HIGH",
+                risk_level_assessment="LOW",
             )
             trace = ObservedKernelTrace(
-                files_read={"~/.aws/credentials", "/etc/passwd"},
+                files_read=set(),
                 files_written=set(),
-                network_endpoints={"194.26.29.112:443"},
-                spawned_binaries={"python3", "curl"},
+                network_endpoints=set(),
+                spawned_binaries=set(),
                 timed_out=False,
-                execution_duration_ms=412.5,
+                execution_duration_ms=0.0,
             )
-            violations = [
-                ViolationRecord(
-                    dimension=SecurityDimension.NETWORK,
-                    severity="CRITICAL",
-                    description="Unauthorized outbound socket connection to 194.26.29.112:443",
-                    offending_artifact="194.26.29.112:443",
-                ),
-                ViolationRecord(
-                    dimension=SecurityDimension.FILESYSTEM,
-                    severity="CRITICAL",
-                    description="Unauthorized read on AWS credential store (~/.aws/credentials)",
-                    offending_artifact="~/.aws/credentials",
-                ),
-            ]
-            composite_score = 0.80
-            is_quarantined = composite_score >= threshold
             drift_result = DriftResult(
-                composite_drift_score=composite_score,
-                network_drift=1.0,
-                filesystem_drift=1.0,
-                process_drift=0.5,
-                is_quarantined=is_quarantined,
-                violations=violations,
+                composite_drift_score=0.00,
+                network_drift=0.0,
+                filesystem_drift=0.0,
+                process_drift=0.0,
+                is_quarantined=False,
+                violations=[],
             )
-            snippet = (
-                extraction_ctx.hook_command
-                if extraction_ctx and extraction_ctx.hook_command
-                else "python3 -c 'import socket,os; open(os.path.expanduser(\"~/.aws/credentials\")).read(); ...'"
-            )
-            forensic_report = ThreatAttributionReport(
-                threat_score=composite_score,
-                attack_category="Credential Harvester & Exfiltration Dropper",
-                mitre_attack_tactics=["T1552.001 (Credentials in Files)", "T1071.001 (Web Protocols)"],
-                culprit_code_snippet=snippet,
-                executive_summary=(
-                    f"Package '{package_name}' declared offline utility intent. However, during lifecycle execution, "
-                    "it spawned a child process to read sensitive AWS credentials and exfiltrate them to remote IP 194.26.29.112:443."
-                ),
-                remediation_recommendations=[
-                    "Block package execution and quarantine build pipeline immediately.",
-                    "Rotate active AWS credentials on affected host system.",
-                    "Inspect network logs for unauthorized connections to 194.26.29.112.",
-                ],
-            )
-            return contract, trace, drift_result, forensic_report
+            return contract, trace, drift_result, None
 
-        # Benign Hook Execution Path (e.g. benign-canvas with "touch build.log")
-        contract = ExpectedBehaviorContract(
-            package_name=package_name,
-            purpose="Standard native compilation and build helper",
-            network_required=False,
-            allowed_domains=[],
-            allowed_read_prefixes=["/tmp", "."],
-            allowed_write_prefixes=["/tmp", "."],
-            allowed_binaries=["node", "bash", "touch", "make"],
-            accesses_user_credentials=False,
-            risk_level_assessment="LOW",
-        )
-        trace = ObservedKernelTrace(
-            files_read={"./package.json"},
-            files_written={"./build.log"},
-            network_endpoints=set(),
-            spawned_binaries={"node", "touch"},
-            timed_out=False,
-            execution_duration_ms=185.0,
-        )
-        drift_result = DriftResult(
-            composite_drift_score=0.00,
-            network_drift=0.0,
-            filesystem_drift=0.0,
-            process_drift=0.0,
-            is_quarantined=False,
-            violations=[],
-        )
-        return contract, trace, drift_result, None
+        # Step 3: Validate live daemon requirements if strictly required
+        client = self.ollama_client or OllamaClient()
+        if self.require_live_services and self.synthesizer is None:
+            if not client.check_health_sync():
+                raise RuntimeError(
+                    f"Ollama daemon is offline or unreachable at {client.base_url}. "
+                    "Gatekeeper strictly requires a live Ollama instance for contract synthesis."
+                )
+
+        if self.require_live_services and self.tracer is None:
+            if not is_docker_available() and not is_bwrap_available():
+                raise RuntimeError(
+                    "Docker daemon is offline or unreachable (and Bubblewrap is not supported on this host). "
+                    "Gatekeeper strictly requires an active Docker/Bubblewrap environment to trace lifecycle execution."
+                )
+
+        # Step 4: AI Expected Behavior Contract Synthesis (Block 2)
+        synthesizer = self.synthesizer or ContractSynthesizer(client=client)
+        contract = synthesizer.synthesize_sync(extraction_ctx)
+
+        # Step 5: Sandboxed Kernel Execution & Syscall Interception (Block 4)
+        tracer = self.tracer or SyscallTracer()
+        runner_path = str(extraction_ctx.runner_script_path) if extraction_ctx.runner_script_path else None
+        if not runner_path or not os.path.exists(runner_path):
+            raise RuntimeError(
+                f"Runner script path '{runner_path}' does not exist for sandboxed execution."
+            )
+
+        report = tracer.run_and_trace(runner_path, package_path)
+
+        if report.status == "docker_unavailable":
+            raise RuntimeError(
+                "Docker daemon is offline or unreachable. "
+                "Gatekeeper strictly requires an active Docker/Bubblewrap environment to trace lifecycle execution."
+            )
+
+        if not report.trace_complete and report.status == "execution_failed" and not report.raw_trace_file:
+            raise RuntimeError(
+                f"Kernel syscall tracing failed inside sandbox: {report.stderr or report.errors}"
+            )
+
+        trace = report.to_observed_kernel_trace_model()
+
+        # Step 6: Differential Vector Arbitration (Block 5)
+        arbitrator = self.arbitrator or DriftArbitrator(threshold=threshold)
+        drift_result = arbitrator.arbitrate(contract, trace)
+
+        # Step 7: Post-Trace AI Forensic Threat Attribution (Block 2)
+        forensic_report = None
+        if drift_result.is_quarantined:
+            forensic_agent = self.forensic_agent or ForensicAgent(client=client)
+            forensic_report = forensic_agent.analyze_incident_sync(
+                ebc=contract,
+                trace=trace,
+                drift=drift_result,
+                context=extraction_ctx,
+            )
+
+        return contract, trace, drift_result, forensic_report
 
 
 # Global coordinator instance
@@ -226,7 +220,10 @@ def analyze_target_package(
     return coord.analyze(package_dir, threshold=threshold)
 
 
-def run_cli(args: Optional[List[str]] = None) -> int:
+def run_cli(
+    args: Optional[List[str]] = None,
+    coordinator: Optional[PipelineCoordinator] = None,
+) -> int:
     """Main CLI function dispatcher. Returns POSIX exit code:
     0: ALLOW (Pass)
     1: QUARANTINE (Drift detected)
@@ -300,51 +297,59 @@ def run_cli(args: Optional[List[str]] = None) -> int:
         return 2
 
     # Execute Analysis
-    if parsed.format == "terminal":
-        print_banner(c)
-        with create_status_spinner("Analyzing package & executing kernel sandbox trace...", c):
+    try:
+        if parsed.format == "terminal":
+            print_banner(c)
+            with create_status_spinner("Analyzing package & executing kernel sandbox trace...", c):
+                contract, trace, drift_result, forensic_report = analyze_target_package(
+                    package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
+                )
+
+            render_comparison_matrix(contract, trace, c)
+
+            if drift_result.is_quarantined:
+                render_quarantine_card(drift_result, c)
+                if forensic_report:
+                    render_forensic_panel(forensic_report, c)
+                return 1
+            else:
+                render_allow_card(drift_result, c)
+                return 0
+
+        elif parsed.format == "json":
             contract, trace, drift_result, forensic_report = analyze_target_package(
-                package_dir, threshold=parsed.threshold, c=c
+                package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
             )
+            report_str = generate_json_report(package_dir, contract, trace, drift_result, forensic_report)
+            if parsed.output:
+                write_report_to_file(report_str, parsed.output)
+                if parsed.verbose:
+                    c.print(f"[bold green]JSON report written to '{parsed.output}'[/bold green]")
+            else:
+                sys.stdout.write(report_str + "\n")
 
-        render_comparison_matrix(contract, trace, c)
+            return 1 if drift_result.is_quarantined else 0
 
-        if drift_result.is_quarantined:
-            render_quarantine_card(drift_result, c)
-            if forensic_report:
-                render_forensic_panel(forensic_report, c)
-            return 1
+        elif parsed.format == "sarif":
+            contract, trace, drift_result, forensic_report = analyze_target_package(
+                package_dir, threshold=parsed.threshold, c=c, coordinator=coordinator
+            )
+            report_str = generate_sarif_report(package_dir, drift_result, forensic_report)
+            if parsed.output:
+                write_report_to_file(report_str, parsed.output)
+                if parsed.verbose:
+                    c.print(f"[bold green]SARIF report written to '{parsed.output}'[/bold green]")
+            else:
+                sys.stdout.write(report_str + "\n")
+
+            return 1 if drift_result.is_quarantined else 0
+
+    except Exception as e:
+        if parsed.format == "terminal":
+            render_error_card(str(e), c)
         else:
-            render_allow_card(drift_result, c)
-            return 0
-
-    elif parsed.format == "json":
-        contract, trace, drift_result, forensic_report = analyze_target_package(
-            package_dir, threshold=parsed.threshold, c=c
-        )
-        report_str = generate_json_report(package_dir, contract, trace, drift_result, forensic_report)
-        if parsed.output:
-            write_report_to_file(report_str, parsed.output)
-            if parsed.verbose:
-                c.print(f"[bold green]JSON report written to '{parsed.output}'[/bold green]")
-        else:
-            sys.stdout.write(report_str + "\n")
-
-        return 1 if drift_result.is_quarantined else 0
-
-    elif parsed.format == "sarif":
-        contract, trace, drift_result, forensic_report = analyze_target_package(
-            package_dir, threshold=parsed.threshold, c=c
-        )
-        report_str = generate_sarif_report(package_dir, drift_result, forensic_report)
-        if parsed.output:
-            write_report_to_file(report_str, parsed.output)
-            if parsed.verbose:
-                c.print(f"[bold green]SARIF report written to '{parsed.output}'[/bold green]")
-        else:
-            sys.stdout.write(report_str + "\n")
-
-        return 1 if drift_result.is_quarantined else 0
+            sys.stderr.write(f"Error: {e}\n")
+        return 2
 
     return 2
 

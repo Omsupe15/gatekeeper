@@ -56,6 +56,19 @@
 - Rationale & Security Invariants: Preserves repository velocity and clean Git merges across distributed contributors and AI agent subtasks.
 - Test Verification: core/extractor/tests/test_extractor.py and core/cli/tests/test_cli.py
 
+[DECISION-CLI-007] Strict Pre-Flight Daemon Enforcement & End-to-End Pipeline Wiring
+- Timestamp: 2026-10-10T12:55:00Z
+- Subsystem: core/cli
+- Problem Context: The initial CLI orchestrator used mock string checks ('malicious' in package name) to simulate responses rather than coordinating real subsystems. Furthermore, executing unprivileged tracing without an active Docker/Bubblewrap backend or Ollama daemon can produce empty event traces, risking silent false-negative ALLOW verdicts.
+- Decision Made:
+  1. Fully connect Block 3 (Extractor) -> Block 2 (Contract Synthesizer) -> Block 4 (SyscallTracer) -> Block 5 (DriftArbitrator) -> Block 2 (ForensicAgent) in PipelineCoordinator.
+  2. For packages requiring lifecycle execution, strictly enforce that both Ollama and Docker/Bubblewrap are running. If either daemon is offline, terminate with Exit Code 2 (ERROR) and display an actionable Rich error card.
+  3. Maintain the sub-50ms fast-path Exit Code 0 (ALLOW) for packages declaring no lifecycle hooks without querying external daemons.
+  4. Fix hermetic runner script generation to anchor paths via `$(dirname "$0")` rather than absolute Windows paths, guaranteeing cross-platform container mount execution fidelity.
+- Alternatives Considered: Silently falling back to empty traces when Docker is stopped. Rejected because it violates fail-closed security invariants (DECISION-SANDBOX-007).
+- Rationale & Security Invariants: Guarantees zero false negatives on unmonitored scripts and ensures live neuro-symbolic contracts accurately constrain kernel executions.
+- Test Verification: core/cli/tests/test_cli.py::test_cli_strict_daemon_error_when_docker_offline and test_cli_real_fixtures
+
 ================================================================================
 REPORT: CLI & EXTRACTOR IMPLEMENTATION PLAN & MERGE CONFLICT RISK AUDIT
 ================================================================================

@@ -55,7 +55,8 @@ class RunnerBuilder:
 # Target: {pkg_path.name}
 
 set -e
-cd "{pkg_path.as_posix()}" || exit 1
+# Anchor working directory to script location (compatible with container mounts)
+cd "$(dirname "$0")" || true
 
 # Execute declared lifecycle command
 {command}
