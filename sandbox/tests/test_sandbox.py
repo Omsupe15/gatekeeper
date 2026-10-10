@@ -49,6 +49,7 @@ from sandbox.log_parser import (
     parse_line,
     parse_trace,
     parse_trace_file,
+    validate_observed_trace,
 )
 from sandbox.tracer import (
     SandboxReport,
@@ -214,7 +215,18 @@ class TestStraceLogParser(unittest.TestCase):
             self.assertIn(ev["syscall"], ("openat", "connect", "execve"))
             self.assertIn("raw", ev)
 
+    def test_validate_observed_trace_rejects_invalid_payload(self):
+        invalid_payload = {
+            "files_read": ["/tmp/ok", ""],
+            "files_written": ["/tmp/out", 123],
+            "network_endpoints": ["bad-endpoint"],
+            "spawned_binaries": {"bash"},
+            "timed_out": "yes",
+            "execution_duration_ms": -1,
+        }
 
+        with self.assertRaises(ValueError):
+            validate_observed_trace(invalid_payload)
 
     def test_unfinished_and_resumed_calls(self):
         trace_stream = """

@@ -484,6 +484,56 @@ def parse_trace_file(trace_path: str) -> List[Dict[str, Any]]:
         return []
 
 
+def _normalize_string_set(value: Any, field_name: str) -> Set[str]:
+    """Normalize a field into a unique, non-empty set of strings."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        raise ValueError(f"{field_name} must be an iterable of strings, not a single string.")
+
+    normalized: Set[str] = set()
+    for item in value:
+        if item is None:
+            continue
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name} items must all be strings.")
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        if field_name == "network_endpoints" and ":" not in cleaned and not cleaned.startswith("/") and not cleaned.startswith("."):
+            raise ValueError(f"{field_name} contains an invalid endpoint: {cleaned!r}")
+        normalized.add(cleaned)
+    return normalized
+
+
+def validate_observed_trace(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and normalize raw sandbox telemetry before it is used downstream."""
+    if payload is None:
+        raise ValueError("Telemetry payload cannot be empty.")
+    if not isinstance(payload, dict):
+        raise ValueError("Telemetry payload must be a dictionary.")
+
+    normalized: Dict[str, Any] = {}
+    for field_name in ("files_read", "files_written", "network_endpoints", "spawned_binaries"):
+        normalized[field_name] = _normalize_string_set(payload.get(field_name, set()), field_name)
+
+    timed_out = payload.get("timed_out", False)
+    if not isinstance(timed_out, bool):
+        raise ValueError("timed_out must be a boolean value.")
+    normalized["timed_out"] = timed_out
+
+    execution_duration_ms = payload.get("execution_duration_ms", 0.0)
+    try:
+        duration_value = float(execution_duration_ms)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("execution_duration_ms must be numeric.") from exc
+    if duration_value < 0:
+        raise ValueError("execution_duration_ms must be non-negative.")
+    normalized["execution_duration_ms"] = duration_value
+
+    return normalized
+
+
 def extract_observed_trace(
     events: List[Dict[str, Any]],
     timed_out: bool = False,
@@ -531,7 +581,7 @@ def extract_observed_trace(
             elif path:
                 spawned_binaries.add(os.path.basename(path))
 
-    return {
+    payload = {
         "files_read": files_read,
         "files_written": files_written,
         "network_endpoints": network_endpoints,
@@ -539,6 +589,7 @@ def extract_observed_trace(
         "timed_out": timed_out,
         "execution_duration_ms": execution_duration_ms,
     }
+    return validate_observed_trace(payload)
 
 
 def extract_observed_trace_model(
