@@ -10,7 +10,7 @@
 │  ╚═════╝  ╚═╝  ╚═╝    ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝   │
 │                                                                                        │
 │  [+] AUTONOMOUS SEMANTIC-TO-KERNEL DRIFT DETECTOR FOR SUPPLY CHAIN SECURITY            │
-│  [*] STATUS: ACTIVE SCANNER    [•] CORE: QWEN3:8B    [#] SANDBOX: BWRAP+STRACE │
+│  [*] STATUS: ACTIVE SCANNER    [•] CORE: qwen3:8b    [#] SANDBOX: BWRAP+STRACE │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -23,7 +23,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge&logo=apache" alt="License"></a>
   <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
   <a href="https://ollama.com"><img src="https://img.shields.io/badge/AI_Engine-Ollama_Local-000000.svg?style=for-the-badge&logo=ollama&logoColor=white" alt="Ollama"></a>
-  <a href="https://ollama.com/library/qwen2.5-coder"><img src="https://img.shields.io/badge/Model-Qwen2.5--Coder%3A7B-FF6F00.svg?style=for-the-badge&logo=alibabacloud&logoColor=white" alt="Model"></a>
+  <a href="https://ollama.com/library/qwen3"><img src="https://img.shields.io/badge/Model-Qwen3%3A8B-FF6F00.svg?style=for-the-badge&logo=alibabacloud&logoColor=white" alt="Model"></a>
 </p>
 
 <p align="center">
@@ -104,7 +104,7 @@ Existing security tooling fails against this attack vector:
 ## 🔭 3. Project Overview
 
 Gatekeeper introduces a **neuro-symbolic, differential verification model** for open-source package intake:
-- It uses a locally hosted, open-weight SLM (**Qwen2.5-Coder:7B** via **Ollama**) to read package manifests, source code, and developer documentation, synthesizing a strictly typed **Expected Behavioral Contract (EBC)**.
+- It uses a locally hosted, open-weight SLM (**qwen3:8b** via **Ollama**) to read package manifests, source code, and developer documentation, synthesizing a strictly typed **Expected Behavioral Contract (EBC)**.
 - It then executes suspect lifecycle installation scripts inside an isolated, unprivileged Linux kernel sandbox (**Bubblewrap**), intercepting low-level system calls (`openat`, `connect`, `execve`) using `strace`.
 - Finally, the **Differential Arbitration Engine** mathematically evaluates the divergence vector between the SLM's synthesized contract and the observed kernel trace.
 
@@ -187,7 +187,7 @@ Export an enterprise report without retaining the package locally:
 
 ## 🧠 7. Open-Source AI Technology Selected
 
-- **Model**: `Qwen2.5-Coder:7B` (Alibaba Cloud Open-Weight Model)
+- **Model**: `qwen3:8b` (Alibaba Cloud Open-Weight Model)
 - **Serving / Inference Engine**: **Ollama** (Local HTTP daemon on port `11434`)
 - **Structured Schema Enforcement**: Ollama JSON format constraint coupled with **Pydantic v2** validation.
 
@@ -200,9 +200,9 @@ ollama pull qwen3:8b
 
 ## ⚖️ 8. Why This Technology Was Selected
 
-1. **Code & Security Comprehension**: QWEN3:8B provides strong local model performance for AST interpretation, code reasoning, and schema adherence.
+1. **Code & Security Comprehension**: qwen3:8b provides strong local model performance for AST interpretation, code reasoning, and schema adherence.
 2. **Zero External Latency & No Token Fees**: Running locally via Ollama eliminates third-party cloud API costs, rate-limiting, and network latency.
-3. **Hardware Accessibility**: The 7B model quantized at 4-bit (`q4_k_m`) requires under 5.0 GB of VRAM, running smoothly on modern laptops, consumer GPUs (NVIDIA RTX 3060+), or Apple Silicon, as well as multi-core CPU runners.
+3. **Hardware Accessibility**: The 8B model runs locally on modern laptops, consumer GPUs, Apple Silicon, and multi-core CPU runners.
 4. **Strict Schema Adherence**: When paired with temperature `0.0` and structured JSON format mode, Ollama reliably returns valid JSON conforming to the Pydantic schema without preamble or markdown artifacts.
 
 ---
@@ -240,7 +240,7 @@ graph TD
         C --> E["LocalIntentAnalyzer"]
         D --> E
         E --> F["Ollama Local Daemon (:11434)"]
-        F --> G["Qwen2.5-Coder 7B Engine"]
+        F --> G["qwen3:8b Engine"]
         G --> H["Pydantic Validation (ExpectedBehaviorContract)"]
     end
 
@@ -298,7 +298,7 @@ gatekeeper/
 - **Architectural Role**: Converts unstructured natural language intent into a structured, machine-verifiable data structure. Pydantic automatically compiles this schema into a standard JSON Schema passed to Ollama's structured output engine, guaranteeing that the SLM output is strictly constrained to this structure.
 
 ### 11.2. 🧠 `llm_engine.py` — Local Intent Analyzer & Inference Interface
-- **Primary Responsibility**: Manages air-gapped, on-premises inference against the local Ollama daemon (`http://localhost:11434/api/generate`) using `qwen2.5-coder:7b`.
+- **Primary Responsibility**: Manages air-gapped, on-premises inference against the local Ollama daemon (`http://localhost:11434/api/generate`) using `qwen3:8b`.
 - **Inference Configuration & Determinism**:
   - Enforces `temperature=0.0` and `num_predict=1024` to eliminate stochastic variance and ensure deterministic, reproducible contract synthesis across repeated runs.
   - Passes the Pydantic-generated JSON Schema using Ollama's native `format="json"` parameter, enabling grammar-constrained decoding at the logit level.
@@ -415,7 +415,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
           │
           ▼
 ┌─────────────────────────┐
-│   Intent Analysis       │ ◄─── QWEN3:8B via Ollama
+│   Intent Analysis       │ ◄─── qwen3:8b via Ollama
 │   Contract Generation   │
 └─────────────────────────┘
           │
@@ -452,7 +452,7 @@ Gatekeeper uses a multi-stage **neuro-symbolic workflow** that combines generati
 | :--- | :--- | :--- | :--- |
 | **Language** | Python | `3.10+` | Core orchestration, parsing, and integration. |
 | **AI Inference** | Ollama | `>= 0.3.0` | Local model serving with low-latency HTTP endpoints and JSON schema support. |
-| **SLM Model** | QWEN3:8B | `8B` | Specialized for code comprehension and structured JSON generation. |
+| **SLM Model** | `qwen3:8b` | `8B` | Specialized for code comprehension and structured JSON generation. |
 | **Schema Validation**| Pydantic | `^2.7.0` | Strict data validation and schema generation. |
 | **Kernel Sandbox** | Bubblewrap (`bwrap`)| `>= 0.8.0` | Unprivileged Linux user and mount namespace isolation. |
 | **Syscall Tracing** | `strace` | `>= 5.16` | Filtered system call interception (`openat`, `connect`, `execve`). |
@@ -622,7 +622,7 @@ python cli.py ./fixtures/malicious-telemetry/
 
 | Component / Library | Upstream Project | License | Role in System |
 | :--- | :--- | :--- | :--- |
-| **Qwen2.5-Coder:7B** | Alibaba Cloud / QwenLM | Apache 2.0 | Open-weight code model used for semantic contract synthesis. |
+| **qwen3:8b** | Alibaba Cloud / QwenLM | Apache 2.0 | Open-weight code model used for semantic contract synthesis. |
 | **Ollama** | Ollama Inc. | MIT | Local inference runtime providing model management and JSON mode. |
 | **Bubblewrap (`bwrap`)** | Containers / GNOME | LGPL 2.0+ | Unprivileged namespace sandboxing for isolated script execution. |
 | **strace** | strace project | LGPL 2.1+ | Intercepts low-level Linux system calls. |
