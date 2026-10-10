@@ -1,0 +1,26 @@
+[DECISION-CLI-001] Strict POSIX Exit Code Contract
+- Timestamp: 2026-10-10T10:20:00Z
+- Subsystem: core/cli
+- Problem Context: CI/CD build agents (GitHub Actions, GitLab CI, Jenkins) need a unambiguous exit signal to block pipelines when supply chain malware is detected.
+- Decision Made: Enforce exit code 0 for ALLOW (Nominal execution), exit code 1 for QUARANTINE (Behavioral drift >= threshold), and exit code 2 for CLI/System errors.
+- Alternatives Considered: Using exit code 0 for all executions and relying purely on stdout text or JSON flags. Declined because CI runners require non-zero exit codes to fail build steps.
+- Rationale & Security Invariants: Guarantees zero-friction pipeline blocking; prevents malicious packages from quietly proceeding into production builds.
+- Test Verification: core/cli/tests/test_cli.py::test_cli_allow_verdict and test_cli_quarantine_verdict
+
+[DECISION-CLI-002] Dual Output Mode (Human Visual Rich vs. Machine SARIF v2.1.0)
+- Timestamp: 2026-10-10T10:20:00Z
+- Subsystem: core/cli
+- Problem Context: Developers interacting with local CLI need rich visual feedback, whereas security platforms require structured vulnerability formats.
+- Decision Made: Implement terminal rendering via Rich library (tables, cards, spinners) and machine-readable output in OASIS SARIF v2.1.0 format.
+- Alternatives Considered: Single plain-text output format. Declined because terminal text is hard for automated tools to parse, and raw JSON is hard for developers to read.
+- Rationale & Security Invariants: Facilitates local adoption while enabling seamless enterprise reporting in GitHub Security & Code Scanning tabs.
+- Test Verification: core/cli/tests/test_cli.py::test_cli_sarif_export and test_cli_json_export
+
+[DECISION-CLI-003] Standard Library Argparse over Heavy Frameworks
+- Timestamp: 2026-10-10T10:20:00Z
+- Subsystem: core/cli
+- Problem Context: CLI argument parsing should be fast and lightweight without adding excessive third-party dependency bloat.
+- Decision Made: Use Python standard library `argparse` paired with `rich` for presentation styling.
+- Alternatives Considered: Typer, Click, Fire. Declined to keep core installation lightweight and avoid version conflicts.
+- Rationale & Security Invariants: Minimal dependency surface reduces supply chain risk on Gatekeeper itself.
+- Test Verification: core/cli/tests/test_cli.py::test_cli_help

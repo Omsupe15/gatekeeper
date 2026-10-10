@@ -1,0 +1,8 @@
+{
+  "name": "benign-canvas",
+  "version": "1.0.0",
+  "description": "Safe native compilation helper fixture",
+  "scripts": {
+    "postinstall": "touch build.log"
+  }
+}
