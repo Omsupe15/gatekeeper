@@ -135,6 +135,77 @@ The arbitrator calculates drift in three areas:
 
 The result contains a composite score, individual scores, and human-readable violations. The default quarantine threshold is `0.40`.
 
+### How the Drift Factor Is Calculated
+
+Each dimension receives a score between `0.0` and `1.0`:
+
+```text
+D = (0.45 * D_net) + (0.35 * D_fs) + (0.20 * D_proc)
+```
+
+The dimensions are weighted differently because unexpected network access and sensitive file access are usually more dangerous than one extra helper process.
+
+#### Network score: `D_net`
+
+- `0.0` when there are no unexpected external connections.
+- `1.0` when the contract forbids network access and the package attempts an external connection.
+- `1.0` when network access is allowed but the destination is not in `allowed_domains`.
+- Loopback connections are filtered as local activity.
+
+A network score of `1.0` contributes `0.45` to the composite score. That alone is enough to pass the default quarantine threshold of `0.40`.
+
+#### Filesystem score: `D_fs`
+
+- `0.0` when all observed reads and writes fit the contract.
+- `1.0` when the package accesses sensitive credentials without permission.
+- Otherwise, each unapproved path contributes a penalty of `0.5`, capped at `1.0`.
+- Sensitive paths include locations such as `.ssh`, `.aws`, `.env`, `.kube/config`, password files, and other protected targets.
+
+An unauthorized credential read is treated as a security invariant violation. It independently forces quarantine, even if the weighted score would otherwise be below the threshold.
+
+#### Process score: `D_proc`
+
+- Standard runtime binaries are filtered to reduce normal build noise.
+- Declared binaries in `allowed_binaries` do not add drift.
+- An undeclared binary contributes `0.5` per binary, capped at `1.0`.
+- High-risk tools such as `curl`, `wget`, `nc`, `socat`, PowerShell, `whoami`, and `id` receive critical-severity violation records when they are not declared.
+
+#### Timeout behavior
+
+A sandbox timeout adds a timeout violation and increases process drift by `0.5`. A timeout also independently forces quarantine because an infinite loop or timing bomb must not be treated as a clean result.
+
+### How Gatekeeper Allows or Quarantines a Package
+
+The decision process is:
+
+1. Build the expected behavior contract.
+2. Collect the observed kernel trace.
+3. Calculate `D_net`, `D_fs`, and `D_proc`.
+4. Combine them into the composite score `D`.
+5. Compare `D` with the configured threshold, which defaults to `0.40`.
+
+```text
+if composite_drift_score >= threshold:
+    QUARANTINE
+else:
+    ALLOW
+```
+
+Examples with the default threshold:
+
+| Situation | Example score | Result |
+| --- | ---: | --- |
+| Declared local build, no unexpected activity | `0.00` | `ALLOW` |
+| One undeclared helper process | `0.10` | `ALLOW`, with a warning |
+| One unauthorized external network connection | `0.45` | `QUARANTINE` |
+| Unauthorized credential access | At least `0.40` | `QUARANTINE` |
+| Timeout or timing-bomb behavior | At least `0.40` | `QUARANTINE` |
+| Several filesystem and process violations | `0.40` or higher | `QUARANTINE` |
+
+The report includes the score, each dimension score, and the violations that caused it. A quarantined scan returns exit code `1`, which allows CI systems to stop the installation or build. An allowed scan returns exit code `0`. Invalid command usage or a missing target path returns exit code `2`.
+
+Changing `--threshold` changes the sensitivity of the final comparison, but it does not remove the evidence or violation records from the report. Lower thresholds quarantine more behavior; higher thresholds allow more behavior before the final gate closes.
+
 ### Step 7: Produce a report
 
 The CLI can display a Rich terminal report or write JSON and SARIF output. A quarantine report can include a forensic explanation, suspicious code context, MITRE ATT&CK tags, and recommended actions.
