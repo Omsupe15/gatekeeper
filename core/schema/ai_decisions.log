@@ -1,0 +1,35 @@
+[DECISION-SCHEMA-001] Pydantic v2 Selected over Marshmallow/Attrs
+- Timestamp: 2026-10-10T10:00:00Z
+- Subsystem: core/schema
+- Problem Context: Need rapid compilation of JSON Schemas for local Ollama grammar-constrained decoding and fast serialization across submodules.
+- Decision Made: Use Pydantic v2 (`pydantic.BaseModel.model_json_schema()`, `model_validate_json()`).
+- Alternatives Considered: Marshmallow (slower Python serialization, cumbersome schema export), Attrs/Dataclasses (lacks built-in JSON Schema generation for LLMs).
+- Rationale & Security Invariants: Pydantic v2 Rust core provides >15x faster runtime validation. Native JSON Schema export directly drives Ollama format="json" constrained decoding, guaranteeing zero malformed JSON contracts.
+- Test Verification: core/schema/tests/test_schema.py::test_ebc_json_schema_export
+
+[DECISION-SCHEMA-002] Set Datatypes for Observed Kernel Traces
+- Timestamp: 2026-10-10T10:05:00Z
+- Subsystem: core/schema
+- Problem Context: Kernel syscall traces emit duplicate file opens and IP connects over execution bursts.
+- Decision Made: Use `Set[str]` instead of `List[str]` in `ObservedKernelTrace`.
+- Alternatives Considered: `List[str]` with post-collection set casting in arbitrator.
+- Rationale & Security Invariants: Guarantees O(1) set operations during differential comparison and removes deduplication overhead in the arbitrator. Prevents memory inflation on high-frequency syscall packages.
+- Test Verification: core/schema/tests/test_schema.py::test_observed_kernel_trace_set_deduplication
+
+[DECISION-SCHEMA-003] Dual-Spec Compatibility & Alias Fallback for Forensics
+- Timestamp: 2026-10-10T10:10:00Z
+- Subsystem: core/schema
+- Problem Context: Schema specifications in TRD and SCHEMA_AND_UI_DESIGN have subtle differences in forensics field naming (`mitre_attack_tactics` vs `mitre_tactics`, `culprit_code_snippet` vs `suspect_ast_nodes`, `remediation_recommendations` vs `remediation_steps`).
+- Decision Made: Use primary field names matching SCHEMA_AND_UI_DESIGN, configure Pydantic `AliasChoices`, and provide property accessors for TRD field names.
+- Alternatives Considered: Strict single-spec naming causing potential runtime AttributeError in downstream modules.
+- Rationale & Security Invariants: Ensures zero-friction inter-module integration while preserving full type safety and backward compatibility across documentation specifications.
+- Test Verification: core/schema/tests/test_schema.py::test_threat_attribution_report_dual_spec_aliases
+
+[DECISION-SCHEMA-004] Fail-Closed Zero-Trust EBC Factory Implementation
+- Timestamp: 2026-10-10T10:15:00Z
+- Subsystem: core/schema
+- Problem Context: In the event of Ollama daemon unavailability, model timeout, or uncorrectable JSON corruption, the pipeline must fail closed without crashing.
+- Decision Made: Add `ExpectedBehaviorContract.zero_trust_fallback()` classmethod factory returning zero allowed network, zero credential permissions, zero spawned binaries, and HIGH risk rating.
+- Alternatives Considered: Raising unhandled exception or returning None, causing downstream pipeline crashes.
+- Rationale & Security Invariants: Enforces defense-in-depth and the security fail-closed invariant: unverified packages execute with zero permissions in the sandbox, ensuring anomalous activity triggers immediate quarantine.
+- Test Verification: core/schema/tests/test_schema.py::test_ebc_zero_trust_fallback
