@@ -1,0 +1,35 @@
+[DECISION-ARB-001] Weighted Asymmetry in Drift Formulation
+- Timestamp: 2026-10-10T11:00:00Z
+- Subsystem: core/arbitrator
+- Problem Context: Supply chain malware prioritizes network exfiltration and credential theft over binary spawning. A symmetric weighting (e.g. 0.33 each) dilutes critical exfiltration events.
+- Decision Made: Assign asymmetric weights: Network Egress (0.45), Filesystem Boundary (0.35), Process Execution (0.20), evaluated against quarantine threshold 0.40.
+- Alternatives Considered: Symmetric weighting (0.33 / 0.33 / 0.33), pure Boolean rule checks without continuous mathematical distance.
+- Rationale & Security Invariants: A single unauthorized network connection independently triggers quarantine (0.45 >= 0.40). Spawning a single benign auxiliary utility causes only minor process drift (0.10) without triggering false alarms.
+- Test Verification: core/arbitrator/tests/test_arbitrator.py::test_network_drift_triggers_quarantine_independently
+
+[DECISION-ARB-002] Exclusion of Localhost and DNS Resolvers
+- Timestamp: 2026-10-10T11:05:00Z
+- Subsystem: core/arbitrator
+- Problem Context: Standard glibc networking and Node.js loaders routinely connect to local loopback and systemd-resolved (127.0.0.53:53).
+- Decision Made: Filter out 127.0.0.1, 127.0.0.53, ::1, and localhost from external network drift calculations in `heuristics.py`.
+- Alternatives Considered: Flagging all connect syscalls regardless of IP.
+- Rationale & Security Invariants: Prevents benign local DNS queries and IPC sockets from being misclassified as malicious C2 outbound exfiltration, eliminating false positives on clean packages.
+- Test Verification: core/arbitrator/tests/test_arbitrator.py::test_loopback_and_dns_resolver_filtering
+
+[DECISION-ARB-003] System Shared Library Read Noise Filtering
+- Timestamp: 2026-10-10T11:10:00Z
+- Subsystem: core/arbitrator
+- Problem Context: Python, Node, and bash interpreters touch hundreds of shared system libraries (`/usr/lib`, `/lib64`, `/etc/ld.so.cache`) during dynamic startup.
+- Decision Made: Whitelist standard OS read paths (`SYSTEM_READ_PREFIXES`) while strictly auditing non-system paths and sensitive targets.
+- Alternatives Considered: Requiring the AI to predict every shared library dependency in `allowed_read_prefixes`.
+- Rationale & Security Invariants: Eliminates runtime loader noise without creating blind spots for sensitive files (`~/.ssh`, `~/.aws`, `.env`) which are explicitly evaluated regardless of location.
+- Test Verification: core/arbitrator/tests/test_arbitrator.py::test_system_library_read_noise_filtered
+
+[DECISION-ARB-004] Independent Quarantine Floor for Credential Theft
+- Timestamp: 2026-10-10T11:15:00Z
+- Subsystem: core/arbitrator
+- Problem Context: With filesystem weight 0.35 and threshold 0.40, a local credential access occurring in isolation would yield D = 0.35, falling 0.05 short of the quarantine threshold.
+- Decision Made: Enforce a quarantine floor: when unauthorized access to sensitive credential stores (`SENSITIVE_TARGETS`) is confirmed without `accesses_user_credentials=True`, guarantee composite drift score >= 0.40.
+- Alternatives Considered: Increasing filesystem weight to 0.40 (which would distort nominal multi-axis ratios).
+- Rationale & Security Invariants: Guarantees zero tolerance for supply chain credential harvesting, ensuring that touching `.aws`, `.ssh`, `.env`, or `/etc/shadow` immediately halts the CI/CD pipeline.
+- Test Verification: core/arbitrator/tests/test_arbitrator.py::test_credential_theft_triggers_quarantine_floor
