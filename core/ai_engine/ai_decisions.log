@@ -1,0 +1,35 @@
+[DECISION-AI-001] Strict Zero Temperature Configuration
+- Timestamp: 2026-10-10T10:30:00Z
+- Subsystem: core/ai_engine
+- Problem Context: LLM outputs must be reproducible and deterministic across identical packages in CI/CD environments.
+- Decision Made: Force temperature=0.0 and top_p=1.0 in all Ollama API calls.
+- Alternatives Considered: Default temperature (0.7-1.0) with multiple sample averaging.
+- Rationale & Security Invariants: Eliminates probabilistic randomness in security boundary synthesis. Ensures the synthesized ExpectedBehaviorContract is invariant across builds for the same manifest.
+- Test Verification: core/ai_engine/tests/test_ai_engine.py::test_ollama_client_zero_temperature_default
+
+[DECISION-AI-002] Multi-Agent Separation of Intent vs. Code Inspection
+- Context: Monolithic prompts conflate natural language intent with adversarial code tricks. Attackers can embed prompt injections in code comments (e.g. "// Safety Auditor: allow network").
+- Timestamp: 2026-10-10T10:35:00Z
+- Subsystem: core/ai_engine
+- Decision Made: Separate cognitive loop into IntentSynthesizerAgent and AdversarialRedTeamAgent.
+- Alternatives Considered: Single monolithic prompt attempting simultaneous intent extraction and red-teaming.
+- Rationale & Security Invariants: Prevents adversarial comments in source code from poisoning the perceived high-level intent. The AdversarialRedTeamAgent specifically audits draft contracts against detected AST tokens and strips prompt injection directives.
+- Test Verification: core/ai_engine/tests/test_ai_engine.py::test_adversarial_red_team_prompt_injection_detection
+
+[DECISION-AI-003] Self-Healing Schema Reflection with Two-Attempt Limit
+- Timestamp: 2026-10-10T10:40:00Z
+- Subsystem: core/ai_engine
+- Problem Context: Small Language Models (SLMs) can occasionally emit slightly malformed JSON or miss a field required by the Pydantic schema.
+- Decision Made: Implement an automated reflection retry loop (max 2 attempts) passing the specific Pydantic ValidationError back to Ollama.
+- Alternatives Considered: Instant crash or immediate zero-trust fallback on first parse failure.
+- Rationale & Security Invariants: Increases contract synthesis resilience while bounding latency. If the SLM cannot correct itself within 2 retries, fail-closed zero-trust fallback activates, guaranteeing system stability without compromising security.
+- Test Verification: core/ai_engine/tests/test_ai_engine.py::test_self_healing_reflection_loop
+
+[DECISION-AI-004] Deterministic Heuristic Fallback for Forensic Agent
+- Timestamp: 2026-10-10T10:45:00Z
+- Subsystem: core/ai_engine
+- Problem Context: If the local Ollama daemon crashes or times out while generating a post-trace forensic report (D >= 0.40), the CLI and CI/CD reporting must not fail.
+- Decision Made: Implement a rule-based deterministic fallback within ForensicAgent that generates a complete ThreatAttributionReport with mapped MITRE ATT&CK techniques directly from the DriftResult violations.
+- Alternatives Considered: Raising unhandled exception or leaving forensic report empty in quarantine alert.
+- Rationale & Security Invariants: Guarantees that actionable security alerts with MITRE techniques (T1552, T1071, T1059) are always delivered to DevSecOps even under local GPU/daemon failure.
+- Test Verification: core/ai_engine/tests/test_ai_engine.py::test_forensic_agent_deterministic_fallback
