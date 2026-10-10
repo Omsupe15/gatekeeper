@@ -1,0 +1,336 @@
+# Gatekeeper: Project Explanation
+
+This document explains Gatekeeper in plain language. It is meant for someone who is new to the repository and wants to understand what the project does, how the pieces fit together, and how to run it.
+
+## 1. What Is Gatekeeper?
+
+Gatekeeper is a security scanner for software packages.
+
+Many packages run scripts while they are being installed. For example, an NPM package can run a `postinstall` script, and a Python package can run code through `setup.py` or a build backend. These scripts are powerful enough to read files, start programs, and make network connections.
+
+That power is useful for legitimate build work, but it also creates a supply-chain security risk. A malicious package could try to:
+
+- read SSH, AWS, or other credentials;
+- connect to an unexpected server;
+- download a second malware stage;
+- launch a shell or another process; or
+- change files outside its own workspace.
+
+Gatekeeper asks a simple question:
+
+> Does the package do what it claims to do?
+
+It answers that question by comparing two things:
+
+1. **Expected behavior**: what the package appears to need based on its metadata, source, and documentation.
+2. **Observed behavior**: what the package actually attempts while it runs in a restricted sandbox.
+
+If the observed behavior goes beyond the expected behavior, Gatekeeper reports drift and can quarantine the package.
+
+## 2. The Main Idea
+
+Gatekeeper uses three kinds of analysis together:
+
+```text
+Package files
+    |
+    v
+Static extraction and local AI analysis
+    |
+    v
+Expected Behavior Contract
+    |
+    +--------------------------+
+    |                          |
+    v                          v
+Sandboxed execution       Syscall trace
+    |                          |
+    +------------+-------------+
+                 v
+          Drift arbitration
+                 |
+          ALLOW or QUARANTINE
+```
+
+The local AI is used to describe the package's expected behavior. It is not trusted to make the final decision. The final decision is based on structured contracts, observed telemetry, and deterministic arbitration rules.
+
+## 3. What Happens During a Scan?
+
+### Step 1: Find the package information
+
+The extractor checks the target directory for common package files:
+
+- `package.json` for NPM packages;
+- `pyproject.toml`, `setup.py`, or `setup.cfg` for Python packages; and
+- `install.sh`, `setup.sh`, or `build.sh` for standalone scripts.
+
+It collects the package name, version, description, dependencies, and lifecycle command.
+
+### Step 2: Find suspicious source behavior
+
+The AST inspector examines source code without executing it. It can identify useful signals such as imports, network-related code, credential paths, high-entropy strings, and child-process activity.
+
+This is not treated as proof by itself. It is context for the expected contract and later forensic reporting.
+
+### Step 3: Build an Expected Behavior Contract
+
+The AI engine can use a local Ollama model to turn package context into a structured contract. The contract describes:
+
+- whether network access is required;
+- which domains are allowed;
+- which directories may be read;
+- which directories may be written;
+- which binaries may be started; and
+- the initial risk level.
+
+The contract is validated with Pydantic. If the AI service is unavailable or produces invalid output, the project has a zero-trust fallback that allows as little as possible.
+
+### Step 4: Run the package in a sandbox
+
+The sandbox runs the selected script without giving it normal access to the host machine. Gatekeeper supports two isolation backends:
+
+- **Docker**: the normal cross-platform choice, especially on Windows and macOS through Docker Desktop.
+- **Bubblewrap**: a native Linux option when unprivileged namespaces are available.
+
+With `backend="auto"`, Gatekeeper selects a suitable backend for the host.
+
+### Step 5: Record important system calls
+
+The tracer records a focused set of system calls:
+
+- `open`, `openat`, `openat2`, and `creat` for file access;
+- `connect` for network connection attempts; and
+- `execve` and `execveat` for started programs.
+
+The parser normalizes these records into an `ObservedKernelTrace`. It also handles escaped paths, process IDs, error results, IPv4 and IPv6 addresses, Unix sockets, unfinished calls, and resumed calls.
+
+### Step 6: Compare expected and observed behavior
+
+The arbitrator calculates drift in three areas:
+
+- network behavior;
+- filesystem behavior; and
+- process behavior.
+
+The result contains a composite score, individual scores, and human-readable violations. The default quarantine threshold is `0.40`.
+
+### Step 7: Produce a report
+
+The CLI can display a Rich terminal report or write JSON and SARIF output. A quarantine report can include a forensic explanation, suspicious code context, MITRE ATT&CK tags, and recommended actions.
+
+## 4. Repository Structure
+
+```text
+gatekeeper/
+|
++-- core/
+|   +-- ai_engine/
+|   |   +-- client.py          Ollama HTTP client
+|   |   +-- agents.py          Intent and adversarial analysis agents
+|   |   +-- forensic_agent.py  Threat explanation support
+|   |   +-- prompts.py         AI system and task prompts
+|   |   +-- tests/             AI engine tests
+|   |
+|   +-- cli/
+|   |   +-- main.py            Main pipeline and command-line entry point
+|   |   +-- reporters.py       JSON and SARIF report generation
+|   |   +-- ui.py              Rich terminal output
+|   |   +-- tests/             CLI tests
+|   |
+|   +-- extractor/
+|   |   +-- manifest_parser.py Package manifest parsing
+|   |   +-- ast_inspector.py   Static source inspection
+|   |   +-- runner_builder.py  Lifecycle script preparation
+|   |   +-- tests/             Extractor tests
+|   |
+|   +-- schema/
+|       +-- contract.py        Expected behavior contract
+|       +-- extraction.py      Static extraction models
+|       +-- telemetry.py       Observed kernel trace model
+|       +-- arbitration.py     Drift and violation models
+|       +-- forensics.py        Threat report model
+|       +-- tests/              Schema tests
+|
++-- sandbox/
+|   +-- bwrap.py               Docker, Bubblewrap, and shared sandbox config
+|   +-- tracer.py              Script execution and tracing orchestration
+|   +-- log_parser.py          Strace parser and telemetry conversion
+|   +-- __main__.py             Direct sandbox command-line interface
+|   +-- Dockerfile              Optional sandbox image
+|   +-- tests/                  Sandbox tests and live scenarios
+|
++-- fixtures/                   Safe test packages and attack examples
++-- docs/                       Design and implementation documentation
++-- pyproject.toml              Dependencies and installed CLI commands
+```
+
+The `core/sandbox/` package contains compatibility forwarding modules for code that imports the sandbox through the `core` namespace. The implementation is kept in the top-level `sandbox/` package.
+
+## 5. Security Defaults
+
+The Docker sandbox is intentionally restrictive. Its default protections include:
+
+- no network access;
+- a read-only container root filesystem;
+- a read-only workspace mount;
+- isolated temporary filesystems for `/tmp` and `/run`;
+- dropped Linux capabilities;
+- `no-new-privileges`;
+- a non-root container user;
+- memory, CPU, and process limits;
+- a strict host-side timeout; and
+- forceful cleanup after timeout or failure.
+
+Host path validation rejects mounts involving sensitive resources such as user home directories, `.ssh`, `.aws`, `.docker`, private keys, password files, and Docker sockets.
+
+Trace data is written to a separate temporary trace location instead of the untrusted workspace. This prevents the tested script from changing its own forensic log.
+
+The sandbox fails closed when Docker or tracing is unavailable. An unavailable or incomplete trace is reported as an error state, not as evidence that the package is harmless.
+
+## 6. Using the Project
+
+### Install the project
+
+Python 3.10 or newer is required. From the repository root:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"
+```
+
+On Linux or macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[test]'
+```
+
+### Scan a package
+
+```bash
+gatekeeper ./fixtures/benign-canvas
+```
+
+The equivalent module command is:
+
+```bash
+python -m core.cli.main ./fixtures/benign-canvas
+```
+
+### Select an output format
+
+```bash
+# Terminal report
+gatekeeper ./fixtures/fake-popup --format terminal
+
+# JSON report
+gatekeeper ./fixtures/fake-popup --format json
+
+# SARIF report for CI tools
+gatekeeper ./fixtures/fake-popup --format sarif --output gatekeeper.sarif
+```
+
+### Change the quarantine threshold
+
+```bash
+gatekeeper ./fixtures/fake-popup --threshold 0.40
+```
+
+### Run the sandbox directly
+
+```bash
+python -m sandbox <script_path> <workspace_dir> --backend auto --timeout 20
+```
+
+Choose a backend explicitly when needed:
+
+```bash
+python -m sandbox <script_path> <workspace_dir> --backend docker
+python -m sandbox <script_path> <workspace_dir> --backend bwrap
+```
+
+Parse an existing strace log:
+
+```bash
+python -m sandbox --parse-trace path/to/strace.log --json
+```
+
+## 7. Exit Codes
+
+The main Gatekeeper CLI uses these exit codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Allowed or no drift found |
+| `1` | Quarantined, or execution failed |
+| `2` | Invalid command usage or path error |
+
+CI systems can use the exit code as a gate, while the JSON or SARIF report provides the details.
+
+## 8. Local AI Configuration
+
+The Ollama client uses these defaults:
+
+- server: `http://localhost:11434`;
+- model: `qwen2.5-coder:7b`; and
+- request timeout: 30 seconds.
+
+You can override the server and model with environment variables:
+
+```bash
+GATEKEEPER_OLLAMA_HOST=http://localhost:11434
+GATEKEEPER_MODEL=qwen2.5-coder:7b
+```
+
+The model must already be available in Ollama. The project uses structured JSON responses and validates them against the Pydantic contract models.
+
+## 9. Testing
+
+Run all configured tests:
+
+```bash
+python -m pytest
+```
+
+Run the sandbox tests directly:
+
+```bash
+python -m unittest discover -s sandbox/tests -v
+```
+
+Tests include schema validation, parser cases, CLI behavior, security argument checks, timeout handling, unavailable-runtime behavior, and live sandbox scenarios. Live Docker tests require a running Docker Linux engine. Bubblewrap tests require a compatible Linux host when they are not mocked.
+
+## 10. Fixtures
+
+The repository includes small fixtures for repeatable testing:
+
+- `fixtures/benign-canvas/`: a package intended to represent ordinary local build work;
+- `fixtures/fake-popup/`: a suspicious standalone shell script; and
+- `fixtures/malicious-telemetry/`: a malicious behavior scenario used by tests.
+
+Do not run unknown package scripts directly on your host. Use an isolated environment.
+
+## 11. Important Limitations
+
+Gatekeeper is designed for install-time package checks, not continuous production monitoring.
+
+Docker isolates processes and namespaces but still shares the host kernel. It is not the same as a virtual machine. Higher-risk analysis may require an additional boundary such as gVisor or a microVM.
+
+The tracer observes connection endpoints and ports. It does not decrypt or inspect the contents of encrypted network traffic.
+
+Linux tracing capabilities are required. Windows users generally need Docker Desktop's Linux engine or WSL2 for the sandbox path.
+
+The repository contains both implemented components and design documents for planned expansion. The README and source code are the best references for the current command behavior.
+
+## 12. More Documentation
+
+- [Product requirements](PRD.md)
+- [Technical requirements](TRD.md)
+- [Application flow](APP_FLOW.md)
+- [Schema and UI design](SCHEMA_AND_UI_DESIGN.md)
+- [Implementation plan](IMPLEMENTATION_PLAN.md)
+- [Sandbox execution and decision log](../sandbox/log.md)
